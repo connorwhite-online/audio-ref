@@ -1,0 +1,52 @@
+[project]
+name = "audioref"
+version = "0.1.0"
+description = "Reference audio analyzer: turns reference tracks into machine-readable musical briefs, MIDI and stems a coding agent can imitate."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "librosa>=0.10.2",
+  "soundfile>=0.12",
+  "soxr>=0.3",
+  "pyloudnorm>=0.1.1",
+  "pretty_midi>=0.2.10",
+  "mido>=1.3",
+  "matplotlib>=3.8",
+  "mcp>=1.10",
+]
+
+[project.optional-dependencies]
+# Demucs source separation (drums / bass / vocals / other stems)
+stems = ["demucs>=4.0.1", "torch>=2.2", "torchaudio>=2.2"]
+# Spotify Basic Pitch polyphonic note transcription (CoreML backend on macOS)
+transcribe = ["basic-pitch>=0.4.0"]
+# Beat This! beat + downbeat tracker
+beats = ["beat-this>=1.1.0", "torch>=2.2"]
+# CLAP zero-shot genre / instrument / mood tagging
+tagging = ["transformers>=4.40", "torch>=2.2"]
+all = ["audioref[stems,transcribe,beats,tagging]"]
+
+[project.scripts]
+audioref = "audioref.cli:main"
+audioref-mcp = "audioref.mcp_server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-timeout>=2.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audioref"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "slow: tests that run full pipelines or ML models",
+  "models: tests that need optional ML models (demucs, basic-pitch, beat-this, CLAP)",
+]
