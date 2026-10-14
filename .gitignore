@@ -1,0 +1,19 @@
+# analysis cache: stems, analysis output, plots (never commit reference audio derivatives)
+.audioref/
+# local config overrides
+audioref.toml
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# generated test fixtures
+tests/.fixtures/
+
+.DS_Store
