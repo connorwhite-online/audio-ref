@@ -560,7 +560,7 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
             elif label in ("hat_closed", "hat_open"):
                 layered = np.sum(np.abs(all_t - t) < 0.015) > 1
                 gap = hs[i + 1][0] - t if i + 1 < len(hs) else 1.0
-                if gap > 0.3 and _sustain_db(envs["crash"], t, 0.3, sr) > -14:
+                if gap > 0.45 and _sustain_db(envs["crash"], t, 0.4, sr) > -10:
                     voice = "crash"  # long, loud ring-out: crash/ride wash rather than an open hat
                 elif layered:
                     voice = hat_default  # a co-sounding snare/kick masks the hat's own decay
