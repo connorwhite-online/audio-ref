@@ -16,7 +16,7 @@ from scipy import ndimage, signal
 
 from .util import log, parabolic_peak
 
-VERSION = "7"
+VERSION = "9"
 SR = 44100
 HOP = 128
 N_FFT = 1024
@@ -163,6 +163,29 @@ def _sustain_db(env: np.ndarray, t: float, after_s: float, sr: int) -> float:
         return -99.0
     lvl = float(np.mean(env[j: j + int(0.02 * sr)])) - bg
     return float(20 * np.log10(max(lvl, 1e-9) / (pk - bg)))
+
+
+def _band_energy(x: np.ndarray, t: float, sr: int, lo: float, hi: float, dur: float = 0.04) -> float:
+    i0 = max(0, int((t - 0.002) * sr))
+    seg = x[i0: i0 + int(dur * sr)]
+    if seg.size < 64:
+        return 0.0
+    sp = np.abs(np.fft.rfft(seg * np.hanning(seg.size))) ** 2
+    f = np.fft.rfftfreq(seg.size, 1 / sr)
+    return float(sp[(f >= lo) & (f < hi)].sum())
+
+
+def _mid_hf_ratio(x: np.ndarray, t: float, sr: int) -> float:
+    """Attack energy ratio (0.8-5 kHz) / (5-12 kHz) in the first 20 ms after t."""
+    i0 = max(0, int((t - 0.002) * sr))
+    seg = x[i0: i0 + int(0.022 * sr)]
+    if seg.size < 64:
+        return 1.0
+    sp = np.abs(np.fft.rfft(seg * np.hanning(seg.size))) ** 2
+    f = np.fft.rfftfreq(seg.size, 1 / sr)
+    mid = sp[(f >= 800) & (f < 5000)].sum()
+    hf = sp[(f >= 5000) & (f < 12000)].sum() + 1e-12
+    return float(mid / hf)
 
 
 def _presence_threshold(c: np.ndarray, ref: float, lo: float = 0.12, hi: float = 0.4) -> float:
@@ -546,6 +569,24 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
             if label == "kick":
                 kick_events[j] = t_ref
             raw.setdefault(label, []).append([t_ref, float(coefs[a["k"], j] / (a["ref"] + 1e-12)), a])
+    # validate snare-family hits: a real snare/clap/rim has at least as much 0.8-5 kHz attack energy as
+    # 5-12 kHz energy (hat/shaker bleed is HF-heavy), and on a kick event it needs a clear coefficient
+    if "snare" in raw:
+        kts = np.array(sorted(h[0] for h in raw.get("kick", [])))
+        sn_t = np.array(sorted(h[0] for h in raw["snare"]))
+        # typical 0.8-5 kHz attack energy of kicks that have no snare-family hit (click + bleed baseline)
+        solo = [k for k in kts if not len(sn_t) or np.min(np.abs(sn_t - k)) > 0.03]
+        base = float(np.median([_band_energy(x, k, sr, 800, 5000) for k in solo[:200]])) if len(solo) >= 4 else 0.0
+        kept = []
+        for h in raw["snare"]:
+            t = h[0]
+            if _mid_hf_ratio(x, t, sr) < 0.35:
+                continue  # HF-heavy: hat/shaker bleed, not a snare/clap/rim
+            if base > 0 and len(kts) and np.min(np.abs(kts - t)) < 0.025 and \
+                    _band_energy(x, t, sr, 800, 5000) < 2.0 * base:
+                continue  # nothing beyond what a kick alone puts in the mid band
+            kept.append(h)
+        raw["snare"] = kept
     hits: dict[str, list[list[float]]] = {}
     all_t = np.array(sorted(h[0] for hs in raw.values() for h in hs))
     kick_t = np.array(sorted(h[0] for h in raw.get("kick", [])))
@@ -565,7 +606,6 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
                 elif layered:
                     voice = hat_default  # a co-sounding snare/kick masks the hat's own decay
                 else:
-                    gap = hs[i + 1][0] - t if i + 1 < len(hs) else 1.0
                     slope = _decay_slope_db_per_ms(envs["hat_closed"], t, gap, sr)
                     voice = "hat_open" if slope > -0.22 else "hat_closed"
             hits.setdefault(voice, []).append([t, amp])
@@ -604,8 +644,14 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
 
 
 # ------------------------------------------------------------------ sound descriptors
+_DESC_BANDS = {"kick": (25, 2500), "snare": (120, 12000), "clap": (500, 8000), "rim": (300, 8000), "tom": (50, 3000),
+               "hat_closed": (4000, 18000), "hat_open": (4000, 18000), "ride": (2500, 18000), "crash": (2500, 18000),
+               "perc": (2000, 16000)}
+
+
 def describe_sounds(drums_mono: np.ndarray, hits: dict[str, list], sr: int = SR, max_hits: int = 24) -> dict:
-    """Per-voice descriptors: pitch centre, decay, brightness, transient sharpness, saturation."""
+    """Per-voice descriptors: pitch centre, decay, brightness, transient sharpness, saturation.
+    Each voice is measured in its own band so co-sounding voices (a kick under a clap) don't leak in."""
     x = np.asarray(drums_mono, dtype=np.float64)
     out = {}
     all_times = sorted(t for hs in hits.values() for t, _ in hs)
@@ -613,30 +659,32 @@ def describe_sounds(drums_mono: np.ndarray, hits: dict[str, list], sr: int = SR,
     for voice, hs in hits.items():
         if len(hs) < 2:
             continue
-        # prefer loud hits that are isolated from other voices' hits
+        lo, hi = _DESC_BANDS.get(voice, (30, 16000))
+        sos = signal.butter(4, [lo / (sr / 2), min(hi / (sr / 2), 0.99)], "bandpass", output="sos")
+        xb = signal.sosfiltfilt(sos, x)
         cands = []
         for t, v in hs:
             others = all_times_arr[np.abs(all_times_arr - t) > 0.004]
             gap_after = np.min(others[others > t] - t) if np.any(others > t) else 1.0
-            gap_before = np.min(t - others[others < t]) if np.any(others < t) else 1.0
-            cands.append((v * min(gap_after, 0.4) * (gap_before > 0.02), t))
+            cands.append((v * min(gap_after, 0.4), t))
         cands.sort(reverse=True)
-        chosen = [t for s, t in cands[:max_hits] if s > 0] or [hs[0][0]]
+        chosen = [t for sc, t in cands[:max_hits] if sc > 0] or [hs[0][0]]
         seg_len = int(0.5 * sr)
-        segs = []
+        segs, raw = [], []
         for t in chosen:
             i = int(t * sr)
             if i + seg_len < len(x) and i >= 0:
-                segs.append(x[i: i + seg_len])
+                segs.append(xb[i: i + seg_len])
+                raw.append(x[i: i + seg_len])
         if not segs:
             continue
-        d = _describe_segments(np.array(segs), sr, voice, all_times_arr, chosen)
+        d = _describe_segments(np.array(segs), sr, voice, np.array(raw))
         d["count"] = len(hs)
         out[voice] = d
     return out
 
 
-def _describe_segments(segs: np.ndarray, sr: int, voice: str, all_times, chosen) -> dict:
+def _describe_segments(segs: np.ndarray, sr: int, voice: str, raw: np.ndarray) -> dict:
     env = np.abs(signal.hilbert(segs, axis=1))
     env = ndimage.uniform_filter1d(env, int(0.002 * sr), axis=1).mean(axis=0)
     pk = int(np.argmax(env[: int(0.05 * sr)]))
@@ -645,13 +693,13 @@ def _describe_segments(segs: np.ndarray, sr: int, voice: str, all_times, chosen)
     below = np.where(after < peak * 0.1)[0]  # -20 dB
     decay_ms = (below[0] if len(below) else len(after)) / sr * 1000
     attack_ms = pk / sr * 1000
-    # spectrum of the first 60 ms vs body
     n_att = int(0.012 * sr)
-    spec_full = np.abs(np.fft.rfft(segs[:, : int(0.2 * sr)] * np.hanning(int(0.2 * sr)), axis=1)).mean(axis=0)
-    freqs = np.fft.rfftfreq(int(0.2 * sr), 1 / sr)
+    win = int(0.2 * sr)
+    spec_full = np.abs(np.fft.rfft(segs[:, :win] * np.hanning(win), axis=1)).mean(axis=0)
+    freqs = np.fft.rfftfreq(win, 1 / sr)
     p = spec_full ** 2
     centroid = float((freqs * p).sum() / (p.sum() + 1e-12))
-    att = np.abs(np.fft.rfft(segs[:, :n_att] * np.hanning(n_att), axis=1)).mean(axis=0) ** 2
+    att = np.abs(np.fft.rfft(raw[:, :n_att] * np.hanning(n_att), axis=1)).mean(axis=0) ** 2
     att_f = np.fft.rfftfreq(n_att, 1 / sr)
     hf_attack = float(att[att_f > 2000].sum() / (att.sum() + 1e-12))
     rms = np.sqrt(np.mean(segs[:, : max(int(decay_ms / 1000 * sr), 64)] ** 2))
@@ -661,7 +709,7 @@ def _describe_segments(segs: np.ndarray, sr: int, voice: str, all_times, chosen)
          "crest_db": round(crest, 1)}
     if voice in ("kick", "tom", "snare"):
         lo_hz, hi_hz = {"kick": (30, 200), "tom": (60, 500), "snare": (100, 400)}[voice]
-        body = segs[:, int(0.02 * sr): int(0.15 * sr)]
+        body = raw[:, int(0.02 * sr): int(0.15 * sr)]
         n = body.shape[1]
         bs = np.abs(np.fft.rfft(body * np.hanning(n), n=8 * n, axis=1)).mean(axis=0)
         bf = np.fft.rfftfreq(8 * n, 1 / sr)
@@ -669,26 +717,23 @@ def _describe_segments(segs: np.ndarray, sr: int, voice: str, all_times, chosen)
         if m.any():
             d["f0_hz"] = round(float(bf[m][int(np.argmax(bs[m]))]), 1)
         if voice == "kick":
-            # pitch sweep: dominant frequency in the first 15 ms vs body
-            head = segs[:, : int(0.015 * sr)]
+            head = raw[:, : int(0.015 * sr)]
             nh = head.shape[1]
             hs = np.abs(np.fft.rfft(head * np.hanning(nh), n=16 * nh, axis=1)).mean(axis=0)
             hf = np.fft.rfftfreq(16 * nh, 1 / sr)
             mm = (hf >= 30) & (hf <= 400)
             d["start_hz"] = round(float(hf[mm][int(np.argmax(hs[mm]))]), 1)
             d["click"] = _level(hf_attack, (0.05, 0.2), ("low", "medium", "high"))
-            # saturation: energy in harmonics 2-5 of f0 relative to f0
             f0 = d.get("f0_hz", 55.0)
             harm = sum(bs[np.argmin(np.abs(bf - f0 * k))] for k in (2, 3, 4, 5))
             fund = bs[np.argmin(np.abs(bf - f0))] + 1e-12
-            ratio = float(harm / fund)
-            d["saturation"] = _level(ratio, (0.25, 0.8), ("clean", "medium", "heavy"))
+            d["saturation"] = _level(float(harm / fund), (0.25, 0.8), ("clean", "medium", "heavy"))
             d["sub_heavy"] = bool(d.get("f0_hz", 60) < 60 and decay_ms > 250)
     if voice in ("hat_closed", "hat_open", "ride", "crash", "perc"):
         d["openness"] = "open" if decay_ms > 120 else "closed"
     if voice in ("snare", "clap"):
-        noise = p[(freqs > 1000)].sum() / (p.sum() + 1e-12)
-        d["noise_ratio"] = round(float(noise), 2)
+        rp = np.abs(np.fft.rfft(raw[:, :win] * np.hanning(win), axis=1)).mean(axis=0) ** 2
+        d["noise_ratio"] = round(float(rp[freqs > 1000].sum() / (rp.sum() + 1e-12)), 2)
     return d
 
 

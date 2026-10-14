@@ -16,7 +16,7 @@ import numpy as np
 from . import models
 from .util import hz_to_midi, log
 
-VERSION = "2"
+VERSION = "3"
 
 PARAMS = {
     "bass": dict(onset_threshold=0.45, frame_threshold=0.3, minimum_note_length=70.0, minimum_frequency=27.0,
@@ -77,8 +77,8 @@ def basic_pitch_notes(y: np.ndarray, sr: int, kind: str) -> list[tuple]:
             head = float(np.median(bends[:3]))
             body = float(np.median(bends[len(bends) // 3:]))
             # a glide starts away from the target pitch and converges onto it
-            if abs(head) >= 3 and abs(body) <= 1:
-                bend = abs(head) / 3.0
+            if abs(head) >= 2 and abs(head - body) >= 2 and abs(body) <= 1:
+                bend = abs(head - body) / 3.0
         out.append((t0, t1, pitch, amp, round(bend, 2)))
     out.sort()
     return out

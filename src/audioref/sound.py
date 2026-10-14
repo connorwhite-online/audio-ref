@@ -8,7 +8,7 @@ from scipy import ndimage, signal
 from . import models
 from .util import log
 
-VERSION = "3"
+VERSION = "4"
 SR = 22050
 
 GENRES = ["house", "deep house", "tech house", "techno", "trance", "drum and bass", "dubstep", "trap", "hip hop",
@@ -126,7 +126,7 @@ def _tremolo(rms: np.ndarray, fps: float, bpm: float | None = None) -> float | N
     if not m.any():
         return None
     k = int(np.argmax(p[m]))
-    if p[m][k] > 6 * np.median(p[(f > 1) & (f < 15)]):
+    if p[m][k] > 12 * np.median(p[(f > 1) & (f < 15)]):
         return round(float(f[m][k]), 1)
     return None
 

@@ -16,9 +16,12 @@ from scipy import ndimage, signal
 from . import models
 from .util import log, mode, parabolic_peak
 
-VERSION = "3"
+VERSION = "7"
 ENV_SR = 22050
 ENV_HOP = 128  # 5.8 ms
+# log-mel flux with centred 1024-pt frames peaks ~17 ms *before* a sharp onset (calibrated on synthetic
+# kicks); shift the envelope time axis so grid times mark attack starts, matching drum-hit times.
+ENV_BIAS_S = 0.017
 
 
 # ---------------------------------------------------------------- onset envelopes
@@ -29,11 +32,16 @@ def onset_envelopes(y: np.ndarray, sr: int = ENV_SR, hop: int = ENV_HOP) -> dict
     logmel = librosa.power_to_db(mel, ref=np.max(mel) + 1e-12, top_db=80)
     flux = np.maximum(0.0, np.diff(logmel, axis=1, prepend=logmel[:, :1]))
     freqs = librosa.mel_frequencies(n_mels=80, fmin=20, fmax=sr / 2)
-    bands = {"low": freqs < 160, "mid": (freqs >= 160) & (freqs < 3000), "high": freqs >= 5000}
+    bands = {"sub": freqs < 100, "low": freqs < 160, "mid": (freqs >= 160) & (freqs < 3000), "high": freqs >= 5000}
     out = {"all": flux.mean(axis=0)}
     for k, m in bands.items():
         out[k] = flux[m].mean(axis=0) if m.any() else np.zeros(flux.shape[1])
-    out["times"] = librosa.frames_to_time(np.arange(flux.shape[1]), sr=sr, hop_length=hop)
+    # energy-weighted flux for the kick band: log flux is scale-invariant, so faint low-frequency leakage
+    # from snare/clap transients would otherwise look as strong as a kick
+    comp = mel ** 0.3
+    lin = np.maximum(0.0, np.diff(comp, axis=1, prepend=comp[:, :1]))
+    out["sub"] = lin[bands["sub"]].sum(axis=0) if bands["sub"].any() else np.zeros(flux.shape[1])
+    out["times"] = librosa.frames_to_time(np.arange(flux.shape[1]), sr=sr, hop_length=hop) + ENV_BIAS_S
     return out
 
 
@@ -81,16 +89,44 @@ def _librosa_beats(env: np.ndarray, times: np.ndarray, sr: int, hop: int, bpm_hi
 
 
 # ---------------------------------------------------------------- grid refinement
+def _dedupe_beats(beats: np.ndarray) -> np.ndarray:
+    """Remove spurious extra beats that sit much closer than the local beat period to their neighbour."""
+    if len(beats) < 3:
+        return beats
+    ibi = float(np.median(np.diff(beats)))
+    keep = [beats[0]]
+    for b in beats[1:]:
+        if b - keep[-1] >= 0.6 * ibi:
+            keep.append(b)
+    return np.asarray(keep)
+
+
 def _beat_indices(beats: np.ndarray) -> np.ndarray:
-    """Integer beat index for each detected beat, tolerant of skipped beats."""
+    """Integer beat index for each detected beat, tolerant of skipped beats (gaps in sparse passages)."""
     if len(beats) < 2:
         return np.arange(len(beats))
     ibi = np.median(np.diff(beats))
     idx = [0]
     for i in range(1, len(beats)):
         local = np.median(np.diff(beats[max(0, i - 8): i + 1])) if i >= 2 else ibi
+        local = local if 0.7 * ibi < local < 1.4 * ibi else ibi
         idx.append(idx[-1] + max(1, int(round((beats[i] - beats[i - 1]) / local))))
     return np.asarray(idx)
+
+
+def _robust_line(idx: np.ndarray, beats: np.ndarray, tol: float = 0.04) -> tuple[float, float, np.ndarray]:
+    """Least-squares beat-time line with iterative outlier rejection. Returns (period, t0, inlier mask)."""
+    mask = np.ones(len(idx), dtype=bool)
+    period, t0 = float(np.median(np.diff(beats))), float(beats[0])
+    for _ in range(4):
+        A = np.vstack([idx[mask], np.ones(mask.sum())]).T
+        (period, t0), *_ = np.linalg.lstsq(A, beats[mask], rcond=None)
+        res = beats - (t0 + period * idx)
+        new = np.abs(res - np.median(res[mask])) < tol
+        if new.sum() < max(4, 0.5 * len(idx)) or np.array_equal(new, mask):
+            break
+        mask = new
+    return float(period), float(t0), mask
 
 
 def _fit_grid(t0: float, period: float, n: int, env_s: np.ndarray, times: np.ndarray,
@@ -114,26 +150,34 @@ def _fit_grid(t0: float, period: float, n: int, env_s: np.ndarray, times: np.nda
     return best
 
 
-def refine_grid(beats: np.ndarray, env: np.ndarray, times: np.ndarray) -> tuple[np.ndarray, dict]:
+def refine_grid(beats: np.ndarray, env: np.ndarray, times: np.ndarray, first_onset: float | None = None,
+                last_onset: float | None = None) -> tuple[np.ndarray, dict]:
     """Turn raw beat estimates into a smooth, onset-aligned grid. Returns (grid, info)."""
-    beats = np.asarray(sorted(beats), dtype=float)
+    beats = _dedupe_beats(np.asarray(sorted(beats), dtype=float))
     if len(beats) < 4:
         return beats, {"steady": False, "residual_ms": None}
     idx = _beat_indices(beats)
-    A = np.vstack([idx, np.ones_like(idx)]).T
-    (period, t0), *_ = np.linalg.lstsq(A, beats, rcond=None)
-    resid = beats - (t0 + period * idx)
+    period, t0, inl = _robust_line(idx, beats)
+    resid = beats[inl] - (t0 + period * idx[inl])
     resid_ms = float(np.std(resid) * 1000)
+    inlier_frac = float(inl.mean())
     env_s = ndimage.gaussian_filter1d(env / (np.max(env) + 1e-12), 1.0)
     n = int(idx[-1]) + 1
-    # steady (programmed) music: one global grid
-    if resid_ms < 18.0:
+    # steady (programmed) music: one global grid, extended to cover the whole audible span
+    if resid_ms < 20.0 and inlier_frac >= 0.75:
         t0r, pr, _ = _fit_grid(float(t0), float(period), n, env_s, times)
-        grid = t0r + pr * np.arange(n)
-        return grid, {"steady": True, "residual_ms": resid_ms, "period": pr}
+        lo = first_onset if first_onset is not None else t0r
+        hi = last_onset if last_onset is not None else t0r + pr * (n - 1)
+        k0 = int(np.floor((lo - t0r) / pr + 0.25))  # allow the first beat to sit slightly before the first onset
+        k1 = int(np.ceil((hi - t0r) / pr - 0.25))
+        k0 = min(k0, 0)
+        k1 = max(k1, n - 1)
+        grid = t0r + pr * np.arange(k0, k1 + 1)
+        return grid, {"steady": True, "residual_ms": resid_ms, "period": pr, "inliers": inlier_frac,
+                      "index_offset": -k0}
     # drifting tempo: local refinement + smoothing
     full_idx = np.arange(n)
-    est = np.interp(full_idx, idx, beats)
+    est = np.interp(full_idx, idx[inl], beats[inl])
     refined = est.copy()
     for i, t in enumerate(est):
         lo, hi = t - 0.035, t + 0.035
@@ -146,7 +190,7 @@ def refine_grid(beats: np.ndarray, env: np.ndarray, times: np.ndarray) -> tuple[
     win = min(len(refined) - (1 - len(refined) % 2), 9)
     if win >= 5:
         refined = signal.savgol_filter(refined, win, 2)
-    return refined, {"steady": False, "residual_ms": resid_ms}
+    return refined, {"steady": False, "residual_ms": resid_ms, "inliers": inlier_frac}
 
 
 # ---------------------------------------------------------------- meter / downbeats
@@ -214,7 +258,8 @@ def analyze(mono: np.ndarray, sr: int, drums: np.ndarray | None = None, chroma: 
     envs = onset_envelopes(drums, sr) if drums is not None and np.max(np.abs(drums)) > 1e-4 else envs_mix
     times = envs["times"]
     # envelope used for grid refinement: percussive band-sum (kick emphasised)
-    ref_env = envs["all"] + 0.7 * envs["low"]
+    # anchor the grid to the kick fundamental (< 100 Hz): snares/claps are often laid back by 10-20 ms
+    ref_env = envs["sub"] + 0.15 * envs["all"]
     if np.max(ref_env) < 1e-6:
         ref_env = envs_mix["all"]
 
@@ -237,7 +282,10 @@ def analyze(mono: np.ndarray, sr: int, drums: np.ndarray | None = None, chroma: 
         return {"bpm": None, "beats": raw_beats.tolist(), "downbeats": [], "meter": None, "method": method,
                 "confidence": 0.0, "tempo_candidates": cands[:4]}
 
-    grid, ginfo = refine_grid(raw_beats, ref_env, times)
+    act = np.where(envs_mix["all"] > 0.05 * np.max(envs_mix["all"]))[0]
+    first_on = float(envs_mix["times"][act[0]]) if len(act) else None
+    last_on = float(envs_mix["times"][act[-1]]) if len(act) else None
+    grid, ginfo = refine_grid(raw_beats, ref_env, times, first_on, last_on)
     # keep only the span where music actually plays
     grid = grid[(grid >= 0) & (grid <= len(mono) / sr)]
     ibis = np.diff(grid)
@@ -289,6 +337,44 @@ def analyze(mono: np.ndarray, sr: int, drums: np.ndarray | None = None, chroma: 
         "tempo_candidates": alternatives,
         "_meter_detail": h_detail,
     }
+
+
+def anchor_to_hits(rh: dict, hits: dict[str, list]) -> dict:
+    """Shift the beat grid so on-beat kicks sit on it (median), the usual producer convention: the kick
+    defines the grid and snares/hats are measured as laid back or pushed relative to it. Falls back to all
+    on-beat drum hits when there are too few kicks. Returns an updated copy of the rhythm dict."""
+    beats = np.asarray(rh.get("beats") or [], dtype=float)
+    if len(beats) < 8 or not hits:
+        return rh
+    ibi = float(np.median(np.diff(beats)))
+
+    def on_beat_offsets(times):
+        t = np.asarray(times, dtype=float)
+        if not len(t):
+            return np.array([])
+        j = np.clip(np.searchsorted(beats, t), 1, len(beats) - 1)
+        near = np.where(np.abs(t - beats[j - 1]) < np.abs(t - beats[j]), beats[j - 1], beats[j])
+        off = t - near
+        return off[np.abs(off) < 0.08 * ibi]
+
+    off = on_beat_offsets([h[0] for h in hits.get("kick", [])])
+    source = "kick"
+    if len(off) < 8:
+        off = on_beat_offsets([h[0] for v, hs in hits.items() if v != "crash" for h in hs])
+        source = "all drums"
+    if len(off) < 8:
+        return rh
+    shift = float(np.median(off))
+    if abs(shift) < 0.0005 or abs(shift) > 0.04:
+        return rh
+    out = dict(rh)
+    out["beats"] = (beats + shift).tolist()
+    out["downbeats"] = (np.asarray(rh.get("downbeats") or []) + shift).tolist()
+    if rh.get("first_downbeat") is not None:
+        out["first_downbeat"] = float(rh["first_downbeat"] + shift)
+    out["bpm_curve"] = [[t + shift, b] for t, b in rh.get("bpm_curve", [])]
+    out["grid_anchor"] = {"source": source, "shift_ms": round(shift * 1000, 2), "n": int(len(off))}
+    return out
 
 
 def _choose_octave(cands: list[dict], envs: dict) -> float | None:
