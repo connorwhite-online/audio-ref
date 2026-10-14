@@ -1,7 +1,7 @@
 # analysis cache: stems, analysis output, plots (never commit reference audio derivatives)
 .audioref/
 # local config overrides
-audioref.toml
+/audioref.toml
 
 # python
 .venv/

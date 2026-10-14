@@ -1,0 +1,32 @@
+# Copy to ./audioref.toml or ~/.config/audioref/audioref.toml. Every key can also be set as AUDIOREF_<KEY>.
+
+# where analyses, stems, MIDI and plots are cached (gitignored when inside a repo)
+cache_dir = ".audioref"
+
+# quick | standard | deep
+default_depth = "standard"
+
+# Demucs model: htdemucs | htdemucs_6s (adds piano/guitar) | htdemucs_ft (slower, better) | none (HPSS fallback)
+separation_model = "htdemucs"
+
+# auto | beat_this | librosa
+beat_backend = "auto"
+
+# auto | basic_pitch | fallback (pYIN / NNLS salience)
+transcription_backend = "auto"
+
+# auto (CLAP at depth=deep) | clap | none
+tagging_backend = "auto"
+clap_model = "laion/larger_clap_music"
+
+# auto | cpu | mps | cuda
+device = "auto"
+
+# keep FLAC copies of separated stems so re-analysis skips Demucs
+keep_stem_cache = true
+
+# URL inputs are refused unless enabled — only for audio you own or have rights to
+allow_download = false
+
+# background workers for the MCP job queue
+max_workers = 1
