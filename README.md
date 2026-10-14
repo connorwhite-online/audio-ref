@@ -40,7 +40,7 @@ The extras are optional; without them the analyzer still works with built-in fal
 | `stems` | Demucs `htdemucs` source separation (drums/bass/vocals/other) | ~80 MB |
 | `beats` | Beat This! beat + downbeat tracker | ~77 MB |
 | `transcribe` | Spotify Basic Pitch note transcription (CoreML on macOS, bundled) | – |
-| `tagging` | LAION CLAP zero-shot genre/instrument/mood tags (`deep` only) | ~780 MB |
+| `tagging` | LAION CLAP zero-shot genre/instrument/mood tags (`deep` only) | ~615 MB |
 
 Model weights download once on first use and are then loaded from the local cache with **no network access**
 (the loaders force Hugging Face offline mode first).

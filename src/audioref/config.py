@@ -28,7 +28,7 @@ class Config:
     transcription_backend: str = "auto"
     # tagging: "auto" (CLAP if installed, deep only) | "clap" | "none"
     tagging_backend: str = "auto"
-    clap_model: str = "laion/larger_clap_music"
+    clap_model: str = "laion/clap-htsat-unfused"
     # torch device: "auto" | "cpu" | "mps"
     device: str = "auto"
     # URL inputs are refused unless this is true (only for audio you own/have rights to)

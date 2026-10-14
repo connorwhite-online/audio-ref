@@ -17,7 +17,7 @@ transcription_backend = "auto"
 
 # auto (CLAP at depth=deep) | clap | none
 tagging_backend = "auto"
-clap_model = "laion/larger_clap_music"
+clap_model = "laion/clap-htsat-unfused"
 
 # auto | cpu | mps | cuda
 device = "auto"

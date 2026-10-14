@@ -16,7 +16,7 @@ from scipy import ndimage, signal
 from . import models
 from .util import log, mode, parabolic_peak
 
-VERSION = "7"
+VERSION = "8"
 ENV_SR = 22050
 ENV_HOP = 128  # 5.8 ms
 # log-mel flux with centred 1024-pt frames peaks ~17 ms *before* a sharp onset (calibrated on synthetic
@@ -291,6 +291,11 @@ def analyze(mono: np.ndarray, sr: int, drums: np.ndarray | None = None, chroma: 
     ibis = np.diff(grid)
     bpm = 60.0 / ginfo["period"] if ginfo.get("steady") else 60.0 / float(np.median(ibis))
 
+    if chroma is None and (raw_down is None or len(raw_down) < 2):
+        # no model downbeats: give the heuristic its strongest cue (chord changes land on downbeats)
+        harm = librosa.effects.harmonic(mono, margin=2.0) if len(mono) < sr * 600 else mono
+        chroma = librosa.feature.chroma_stft(y=harm, sr=sr, hop_length=1024)
+        chroma_times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=1024)
     feats = _beat_features(grid, envs, chroma, chroma_times)
     h_meter, h_phase, h_conf, h_detail = estimate_meter_and_phase(feats)
     meter, phase, dconf, dsource = h_meter, h_phase, h_conf, "heuristic"

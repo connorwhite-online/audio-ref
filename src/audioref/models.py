@@ -15,6 +15,8 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+# transformers otherwise spawns a background thread that queries the Hub to convert .bin checkpoints
+os.environ.setdefault("DISABLE_SAFETENSORS_CONVERSION", "1")
 
 _lock = threading.RLock()
 _models: dict[str, Any] = {}

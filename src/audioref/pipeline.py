@@ -205,7 +205,7 @@ class Pipeline:
 
         def _sound():
             desc = {}
-            for k in ("bass", "other", "vocals", "piano", "guitar"):
+            for k in (() if quick else ("bass", "other", "vocals", "piano", "guitar")):
                 if k in st22 and _active(st22[k], mono):
                     desc[k] = sound.describe(st22[k], SR22, stems44[k], bpm=bpm)
             full = sound.describe(mono, SR22, audio.stereo_norm, bpm=bpm)
@@ -218,7 +218,7 @@ class Pipeline:
                         side[k] = r
             return {"stems": desc, "full": full, "space": space, "sidechain": side}
 
-        snd = tc.cached(f"sound-{tag}", sound.VERSION + "." + drums.VERSION, _sound, force)
+        snd = tc.cached(f"sound-{tag}{'-q' if quick else ''}", sound.VERSION + "." + drums.VERSION, _sound, force)
         tags = None
         if deep and cfg.tagging_backend != "none" and caps["clap"]:
             progress(0.88, "tagging (CLAP)")
@@ -279,8 +279,7 @@ class Pipeline:
             got = separation.load_stems(hp) if not force else None
             if got:
                 return got, "hpss-fallback"
-            st = separation.pseudo_stems(audio.stereo_norm.mean(axis=0, keepdims=True), ingest.SR)
-            st = {k: np.repeat(v, 2, axis=0) for k, v in st.items()}
+            st = separation.pseudo_stems(audio.stereo_norm, ingest.SR)
             separation.save_stems(st, hp, ingest.SR)
             return st, "hpss-fallback"
         st, used = separation.separate(audio.stereo_norm, ingest.SR, method, self.cfg.device)

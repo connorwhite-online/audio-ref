@@ -290,7 +290,8 @@ def clap_tags(y: np.ndarray, sr: int, model_name: str, device: str = "auto", n_w
             t_emb = getattr(t_emb, "pooler_output", t_emb)
             t_emb = torch.nn.functional.normalize(t_emb, dim=-1)
             sims = (a_emb @ t_emb.T)[0]
-            probs = torch.softmax(sims * 100.0 / 1.0, dim=0).numpy()
+            scale = float(model.logit_scale_a.exp()) if hasattr(model, "logit_scale_a") else 20.0
+            probs = torch.softmax(sims * scale, dim=0).numpy()
             order = np.argsort(-probs)
             k = 5 if cat != "instruments" else 8
             out[cat] = {labels[i]: round(float(probs[i]), 3) for i in order[:k]}

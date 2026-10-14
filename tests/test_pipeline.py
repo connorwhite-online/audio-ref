@@ -251,8 +251,9 @@ def test_deep_depth_tags_and_plots(service, house_standard):
     r = service.analyze(res["analysis"]["track"]["path"], depth="deep", trim=False)
     a = r["analysis"]
     assert a["generator"]["depth"] == "deep"
-    assert a["sound"]["tags"]["method"] in ("clap", "heuristic")
-    if a["sound"]["tags"]["method"] == "clap":
-        assert a["sound"]["tags"]["genre"] and a["sound"]["tags"]["instruments"]
+    assert a["sound"]["tags"]["method"] == "clap", a["warnings"]
+    genre = a["sound"]["tags"]["genre"]
+    assert genre and abs(sum(genre.values())) <= 1.0 and max(genre.values()) > 0.1  # a real, non-flat distribution
+    assert a["sound"]["tags"]["instruments"]
     plots = {Path(p).stem for p in r["files"].get("plots", [])}
     assert {"spectrogram", "energy", "beat_grid", "drum_grid", "layers"} <= plots

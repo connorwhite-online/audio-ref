@@ -60,21 +60,25 @@ def demucs_separate(stereo: np.ndarray, sr: int, model_name: str = "htdemucs", d
 
 
 def pseudo_stems(stereo: np.ndarray, sr: int) -> dict[str, np.ndarray]:
-    """Cheap fallback: HPSS (percussive -> drums) + low/high crossover of the harmonic part."""
-    out: dict[str, list[np.ndarray]] = {k: [] for k in STEMS}
-    for ch in stereo:
-        S = librosa.stft(ch, n_fft=4096, hop_length=1024)
-        H, P = librosa.decompose.hpss(S, kernel_size=(17, 31), margin=1.0)
-        n = ch.shape[-1]
-        drums = librosa.istft(P, hop_length=1024, length=n)
-        harm = librosa.istft(H, hop_length=1024, length=n)
-        sos_lo = signal.butter(4, 180 / (sr / 2), "lowpass", output="sos")
-        sos_hi = signal.butter(4, 180 / (sr / 2), "highpass", output="sos")
-        out["drums"].append(drums)
-        out["bass"].append(signal.sosfiltfilt(sos_lo, harm))
-        out["other"].append(signal.sosfiltfilt(sos_hi, harm))
-        out["vocals"].append(np.zeros(n))
-    return {k: np.asarray(v, dtype=np.float32) for k, v in out.items()}
+    """Cheap fallback: HPSS (percussive -> drums) + low/high crossover of the harmonic part.
+    Runs on a 22.05 kHz mono mix (fast) and returns 44.1 kHz stems."""
+    import soxr
+
+    mono = np.asarray(stereo, dtype=np.float32)
+    mono = mono.mean(axis=0) if mono.ndim == 2 else mono
+    n = mono.shape[-1]
+    y = soxr.resample(mono, sr, 22050)
+    S = librosa.stft(y, n_fft=2048, hop_length=512)
+    H, P = librosa.decompose.hpss(S, kernel_size=(13, 17), margin=1.0)
+    drums = soxr.resample(librosa.istft(P, hop_length=512, length=len(y)), 22050, sr)[:n]
+    harm = soxr.resample(librosa.istft(H, hop_length=512, length=len(y)), 22050, sr)[:n]
+    drums = np.pad(drums, (0, max(0, n - len(drums))))
+    harm = np.pad(harm, (0, max(0, n - len(harm))))
+    sos_lo = signal.butter(4, 180 / (sr / 2), "lowpass", output="sos")
+    sos_hi = signal.butter(4, 180 / (sr / 2), "highpass", output="sos")
+    out = {"drums": drums, "bass": signal.sosfiltfilt(sos_lo, harm), "other": signal.sosfiltfilt(sos_hi, harm),
+           "vocals": np.zeros(n)}
+    return {k: np.repeat(np.asarray(v, dtype=np.float32)[None, :], 2, axis=0) for k, v in out.items()}
 
 
 def separate(stereo: np.ndarray, sr: int, method: str = "htdemucs", device: str = "auto",
@@ -100,7 +104,8 @@ def save_stems(stems: dict[str, np.ndarray], folder: Path, sr: int, fmt: str = "
     paths = {}
     for k, v in stems.items():
         p = folder / f"{k}.{fmt}"
-        sf.write(str(p), (v * scale).T, sr, subtype="PCM_16")
+        data = v[:1] if v.ndim == 2 and v.shape[0] == 2 and np.array_equal(v[0], v[1]) else v  # mono stems stay mono
+        sf.write(str(p), (np.atleast_2d(data) * scale).T, sr, subtype="PCM_16")
         paths[k] = str(p)
     (folder / "scale.json").write_text(json.dumps({"scale": scale}))
     return paths
@@ -123,5 +128,6 @@ def load_stems(folder: Path, names=None, fmt: str = "flac") -> dict[str, np.ndar
                 return None
             continue
         x, _ = sf.read(str(p), dtype="float32", always_2d=True)
-        out[k] = x.T.copy() / scale
+        x = x.T.copy() / scale
+        out[k] = np.repeat(x, 2, axis=0) if x.shape[0] == 1 else x
     return out or None

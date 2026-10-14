@@ -16,7 +16,7 @@ from scipy import ndimage, signal
 
 from .util import log, parabolic_peak
 
-VERSION = "9"
+VERSION = "10"
 SR = 44100
 HOP = 128
 N_FFT = 1024
@@ -104,14 +104,25 @@ def _hilbert_env(y: np.ndarray, chunk: int = 1 << 19, pad: int = 4096) -> np.nda
 
 
 def _band_envelopes(x: np.ndarray, sr: int) -> dict[str, np.ndarray]:
+    """Analytic-signal envelope per voice band, at the full sample rate. Low bands are filtered on a decimated
+    copy (the kick band needs ~5 kHz, not 44.1 kHz) and the smooth envelope is interpolated back."""
+    import soxr
+
     out = {}
     cache: dict[tuple, np.ndarray] = {}
+    n = len(x)
+    t_full = np.arange(n)
     for v, (lo, hi) in _BANDS.items():
         if (lo, hi) not in cache:
-            sos = signal.butter(4, [lo / (sr / 2), min(hi / (sr / 2), 0.99)], "bandpass", output="sos")
-            y = signal.sosfiltfilt(sos, x)
-            env = _hilbert_env(y)
-            cache[(lo, hi)] = ndimage.uniform_filter1d(env, int(0.0007 * sr))
+            factor = 2 if hi <= 9000 else 1  # >2x decimation shifts the kick attack by a few ms
+            sr_d = sr // factor
+            xd = soxr.resample(x, sr, sr_d) if factor > 1 else x
+            sos = signal.butter(4, [lo / (sr_d / 2), min(hi / (sr_d / 2), 0.99)], "bandpass", output="sos")
+            y = signal.sosfiltfilt(sos, xd)
+            env = ndimage.uniform_filter1d(_hilbert_env(y), max(1, int(0.0007 * sr_d)))
+            if factor > 1:
+                env = np.interp(t_full, np.arange(len(env)) * factor, env)
+            cache[(lo, hi)] = env[:n]
         out[v] = cache[(lo, hi)]
     return out
 
