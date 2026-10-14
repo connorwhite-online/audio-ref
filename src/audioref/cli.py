@@ -284,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--force", action="store_true", help="ignore cached results")
     a.add_argument("--out", help="also copy brief.md, analysis.json, midi/, stems/, plots/ here")
     a.add_argument("--out-per-track", action="store_true", help="always create a sub-folder per track under --out")
-    a.add_argument("--full-json", action="store_true", help="with --json: untrimmed analysis")
+    a.add_argument("--full-json", action="store_true", help="with --json: include the full analysis instead of a summary")
     a.add_argument("--separation", choices=["htdemucs", "htdemucs_6s", "htdemucs_ft", "none"])
     a.add_argument("--allow-download", action="store_true", help="allow http(s) URLs (only audio you own/have rights to)")
     a.add_argument("-q", "--quiet", action="store_true")

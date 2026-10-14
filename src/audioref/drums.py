@@ -16,7 +16,7 @@ from scipy import ndimage, signal
 
 from .util import log, parabolic_peak
 
-VERSION = "11"
+VERSION = "12"
 SR = 44100
 HOP = 128
 N_FFT = 1024
@@ -606,7 +606,7 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
         kept = []
         for h in raw["snare"]:
             t = h[0]
-            if _mid_hf_ratio(x, t, sr) < 0.35:
+            if _mid_hf_ratio(x, t, sr) < 0.2:
                 continue  # HF-heavy: hat/shaker bleed, not a snare/clap/rim
             if base > 0 and len(kts) and np.min(np.abs(kts - t)) < 0.025 and \
                     _band_energy(x, t, sr, 800, 5000) < 2.0 * base:

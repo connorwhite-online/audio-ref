@@ -6,7 +6,7 @@ import numpy as np
 
 from .util import mode
 
-VERSION = "3"
+VERSION = "4"
 CORE_WEIGHT = {"kick": 1.0, "snare": 1.0, "clap": 1.0, "rim": 0.6, "hat_closed": 0.5, "hat_open": 0.5,
                "ride": 0.4, "perc": 0.4, "tom": 0.7, "crash": 0.2}
 GRID_VOICES = ("kick", "snare", "clap", "rim", "hat_closed", "hat_open", "ride", "tom", "perc", "crash")
@@ -448,29 +448,42 @@ def _describe_fill(i: int, bar: dict, m: np.ndarray, ctx: np.ndarray, voices: li
 
 
 def _snare_rolls(bars: list[dict], meter: int, steps: int) -> list[dict]:
-    """Runs of >= 2 bars whose snare/clap density keeps increasing (classic build rolls)."""
-    dens = []
-    for b in bars:
+    """Runs of >= 2 bars whose snare/clap density (or, with no kick, total non-kick density - separated stems
+    often scatter a roll's 32nds into hats) keeps increasing: the classic build roll."""
+    def count(b, voices, extra=True):
         n = 0
-        for v in ("snare", "clap"):
+        for v in voices:
             g = b["voices"].get(v)
             if g is not None:
                 n += int((g["vel"] > 0).sum())
-        n += sum(1 for e in b["extra"] if e["voice"] in ("snare", "clap"))
-        dens.append(n)
+        if extra:
+            n += sum(1 for e in b["extra"] if e["voice"] in voices)
+        return n
+
+    sn = [count(b, ("snare", "clap")) for b in bars]
+    allv = [count(b, ("snare", "clap", "rim", "hat_closed", "hat_open", "perc", "tom")) for b in bars]
+    kick = [count(b, ("kick",), False) for b in bars]
     rolls = []
     i = 0
-    while i < len(dens) - 1:
-        if dens[i] < meter:
-            i += 1
-            continue
-        j = i
-        while j + 1 < len(dens) and dens[j + 1] > dens[j] and dens[j + 1] >= meter:
-            j += 1
-        if j - i >= 1 and dens[j] >= 2 * max(dens[i], 1) and dens[j] >= steps // 2:
-            rolls.append({"start_bar": i, "end_bar": j + 1, "density_per_bar": dens[i: j + 1],
+    while i < len(bars) - 1:
+        found = None
+        for dens, need_no_kick in ((sn, False), (allv, True)):
+            if dens[i] < meter or (need_no_kick and kick[i] > 0):
+                continue
+            j = i
+            while j + 1 < len(dens) and dens[j + 1] > dens[j] and (not need_no_kick or kick[j + 1] == 0):
+                j += 1
+            if j - i >= 1 and dens[j] >= 2 * max(dens[i], 1) and dens[j] >= steps // 2:
+                # keep going through dense, kick-less bars (the roll's last bar often holds a stop)
+                while j + 1 < len(bars) and kick[j + 1] == 0 and allv[j + 1] >= 0.5 * allv[j] and allv[j + 1] >= meter:
+                    j += 1
+                found = (i, j, dens)
+                break
+        if found:
+            a, b, dens = found
+            rolls.append({"start_bar": a, "end_bar": b + 1, "density_per_bar": dens[a: b + 1],
                           "technique": "snare roll accelerating"})
-            i = j + 1
+            i = b + 1
         else:
             i += 1
     return rolls

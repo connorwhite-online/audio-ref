@@ -2,7 +2,7 @@
  "pipeline": [
   {
    "song": "house",
-   "elapsed_s": 28.5,
+   "elapsed_s": 28.8,
    "duration_s": 87.5,
    "bpm_true": 112.0,
    "bpm_est": 112.0,
@@ -12,7 +12,7 @@
    "downbeat_f": 1.0,
    "meter_ok": true,
    "swing_true": 0.58,
-   "swing_est": 0.582,
+   "swing_est": 0.583,
    "key_true": "F major",
    "key_est": "F major",
    "key_ok": true,
@@ -22,10 +22,10 @@
    "chord_sevenths": 0.899,
    "drum_f1": {
     "kick": 1.0,
-    "snare": 0.0,
+    "snare": 0.697,
     "clap": 0.968,
-    "hat_closed": 0.944,
-    "hat_open": 0.857
+    "hat_closed": 0.929,
+    "hat_open": 0.913
    },
    "section_boundaries": "7/7",
    "labels_est": [
@@ -49,7 +49,7 @@
   },
   {
    "song": "hiphop",
-   "elapsed_s": 17.3,
+   "elapsed_s": 17.4,
    "duration_s": 67.3,
    "bpm_true": 88.0,
    "bpm_est": 88.0,
@@ -59,7 +59,7 @@
    "downbeat_f": 1.0,
    "meter_ok": true,
    "swing_true": 0.62,
-   "swing_est": 0.624,
+   "swing_est": 0.622,
    "key_true": "A minor",
    "key_est": "A minor",
    "key_ok": true,
@@ -69,14 +69,13 @@
    "chord_sevenths": 0.979,
    "drum_f1": {
     "kick": 0.994,
-    "snare": 0.769,
+    "snare": 0.886,
     "rim": 0.0,
-    "hat_closed": 0.938
+    "hat_closed": 0.961
    },
-   "section_boundaries": "4/5",
+   "section_boundaries": "3/5",
    "labels_est": [
     "intro",
-    "verse",
     "verse",
     "chorus",
     "outro"
@@ -91,7 +90,7 @@
   },
   {
    "song": "waltz",
-   "elapsed_s": 8.3,
+   "elapsed_s": 8.5,
    "duration_s": 30.6,
    "bpm_true": 150.0,
    "bpm_est": 150.0,
@@ -129,7 +128,7 @@
   },
   {
    "song": "techno",
-   "elapsed_s": 15.1,
+   "elapsed_s": 15.2,
    "duration_s": 61.8,
    "bpm_true": 128.0,
    "bpm_est": 128.0,
@@ -141,15 +140,15 @@
    "swing_true": 0.5,
    "swing_est": 0.5,
    "key_true": "A minor",
-   "key_est": "C major",
-   "key_ok": false,
-   "loop_ok": false,
+   "key_est": "A minor",
+   "key_ok": true,
+   "loop_ok": true,
    "chord_root": 0.99,
    "chord_majmin": 0.99,
    "chord_sevenths": 0.99,
    "drum_f1": {
     "kick": 1.0,
-    "snare": 0.658,
+    "snare": 0.847,
     "clap": 0.984,
     "hat_open": 0.964
    },
@@ -173,7 +172,7 @@
   },
   {
    "song": "live",
-   "elapsed_s": 11.2,
+   "elapsed_s": 11.4,
    "duration_s": 41.0,
    "bpm_true": 98.0,
    "bpm_est": 98.0,
@@ -193,14 +192,13 @@
    "chord_sevenths": 1.0,
    "drum_f1": {
     "kick": 1.0,
-    "snare": 0.414,
-    "hat_closed": 0.653
+    "snare": 0.821,
+    "hat_closed": 0.775
    },
    "section_boundaries": "2/2",
    "labels_est": [
     "verse",
-    "chorus",
-    "outro"
+    "verse"
    ],
    "labels_true": [
     "verse",
@@ -247,16 +245,16 @@
    "song": "hiphop",
    "drum_f1": {
     "kick": 0.988,
-    "snare": 1.0,
-    "rim": 0.952,
+    "snare": 0.975,
+    "rim": 1.0,
     "hat_closed": 0.997
    },
    "swing_true": 0.62,
-   "swing_est": 0.619,
+   "swing_est": 0.62,
    "microtiming_vs_kick_est": {
     "kick": 0.0,
     "hat_closed": 7.2,
-    "snare": 17.7
+    "snare": 17.6
    },
    "microtiming_vs_kick_true": {
     "kick": 0.0,
@@ -329,16 +327,15 @@
    "song": "live",
    "drum_f1": {
     "kick": 1.0,
-    "snare": 0.915,
-    "hat_closed": 0.745
+    "snare": 1.0,
+    "hat_closed": 0.775
    },
    "swing_true": 0.5,
    "swing_est": 0.501,
    "microtiming_vs_kick_est": {
     "kick": 0.0,
-    "hat_closed": -0.3,
-    "hat_open": -1.2,
-    "snare": -0.7
+    "hat_closed": -0.4,
+    "snare": -1.1
    },
    "microtiming_vs_kick_true": {},
    "key_ok": true,
@@ -356,7 +353,7 @@
   {
    "track": "choice",
    "note": "drum+bass loop (no chords)",
-   "elapsed_s": 6.4,
+   "elapsed_s": 7.0,
    "duration_s": 25.026,
    "bpm": 68.0,
    "meter": "4/4",
@@ -374,7 +371,7 @@
   {
    "track": "vibeace",
    "note": "Kevin MacLeod, electronic",
-   "elapsed_s": 15.8,
+   "elapsed_s": 15.9,
    "duration_s": 61.459,
    "bpm": 130.05,
    "meter": "4/4",
@@ -390,7 +387,7 @@
   {
    "track": "fishin",
    "note": "folk song w/ vocals",
-   "elapsed_s": 35.4,
+   "elapsed_s": 35.7,
    "duration_s": 132.989,
    "bpm": 88.5,
    "meter": "4/4",
@@ -399,13 +396,13 @@
     "Bb",
     "Eb"
    ],
-   "sections": "intro verse build chorus verse verse build chorus outro",
+   "sections": "intro verse build chorus verse build chorus outro",
    "warnings": 5
   },
   {
    "track": "sweetwaltz",
    "note": "3/4 waltz",
-   "elapsed_s": 12.7,
+   "elapsed_s": 12.5,
    "duration_s": 49.2,
    "bpm": 149.99,
    "meter": "3/4",
@@ -417,13 +414,13 @@
     "Cm",
     "F7sus4"
    ],
-   "sections": "intro verse chorus chorus chorus verse verse verse outro",
+   "sections": "intro verse chorus verse verse verse",
    "warnings": 2
   },
   {
    "track": "pistachio",
    "note": "ragtime piano",
-   "elapsed_s": 18.3,
+   "elapsed_s": 18.1,
    "duration_s": 70.766,
    "bpm": 144.34,
    "meter": "4/4",
@@ -439,13 +436,13 @@
     "Bbsus2",
     "C7sus4"
    ],
-   "sections": "intro verse verse chorus chorus verse chorus outro",
+   "sections": "intro verse verse verse chorus chorus verse chorus outro",
    "warnings": 5
   },
   {
    "track": "brahms",
    "note": "Hungarian Dance 5 (orchestral; G minor arr.)",
-   "elapsed_s": 12.3,
+   "elapsed_s": 12.2,
    "duration_s": 45.845,
    "bpm": 150.56,
    "meter": "2/4",
@@ -453,7 +450,7 @@
    "loop": [
     "Gm"
    ],
-   "sections": "verse verse chorus build chorus verse verse build chorus",
+   "sections": "verse chorus verse chorus verse verse chorus",
    "warnings": 5
   }
  ]

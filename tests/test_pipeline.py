@@ -87,7 +87,7 @@ def test_folder_analysis(service, demo_songs, tmp_path):
     (tmp_path / "notes.txt").write_text("ignore me")
     out = service.analyze(str(tmp_path), depth="quick")
     assert isinstance(out, list) and len(out) == 2
-    meters = sorted(o["analysis"]["rhythm"]["meter"] for o in out)
+    meters = sorted(o["summary"]["meter"] for o in out)
     assert meters == ["3/4", "4/4"]
 
 
@@ -147,7 +147,7 @@ def test_compare_blend_map_render(service, house_standard, demo_songs, tmp_path)
 
     # close the loop: re-analyze the rendered plan and check the tempo survived
     back = service.analyze(r["path"], depth="quick")
-    assert abs(back["analysis"]["rhythm"]["bpm"] - plan["bpm"]) / plan["bpm"] < 0.02
+    assert abs(back["summary"]["bpm"] - plan["bpm"]) / plan["bpm"] < 0.02
 
 
 def test_list_and_delete(service, demo_songs):
@@ -206,7 +206,8 @@ def test_mcp_in_process(cache_dir, house_standard):
                     "delete_track", "get_job", "status"} <= names
             r = await c.call_tool("analyze_track", {"path": res["analysis"]["track"]["path"], "depth": "standard"})
             d = json.loads(r.content[0].text)
-            assert d["track_id"] == res["track_id"] and len(r.content[0].text) < 20000
+            assert d["track_id"] == res["track_id"] and d["summary"]["bpm"] > 100
+            assert len(r.content[0].text) < 16000, len(r.content[0].text)  # ~4k-token budget
             r = await c.call_tool("analyze_track", {"path": res["analysis"]["track"]["path"], "depth": "deep", "wait_s": 0})
             job = json.loads(r.content[0].text)
             assert job["status"] in ("queued", "running") and job["job_id"]

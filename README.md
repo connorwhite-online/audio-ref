@@ -119,10 +119,11 @@ Kinds: `start`/`intro`, `scene`/`section`, `build`, `drop`/`reveal`/`impact`, `h
 
 | depth | runs | measured (M1, 16 GB) |
 |---|---|---|
-| `quick` | HPSS pseudo-stems, beats/downbeats, drums, swing, key, chords, energy/sections | ~6–12 s per minute of audio |
-| `standard` (default) | + Demucs stems, Basic Pitch bass/keys/vocal transcription, parts, sound palette, sidechain, MIDI | ~20–30 s per minute (first run of a session adds ~10 s model load) |
-| `deep` | + CLAP tags and PNG plots | + ~5–15 s |
+| `quick` | HPSS pseudo-stems, beats/downbeats, drums, swing, key, chords, energy/sections | 3-min track: 18.5 s warm / 22 s cold (target < 20 s) |
+| `standard` (default) | + Demucs stems, Basic Pitch bass/keys/vocal transcription, parts, sound palette, sidechain, MIDI | 3-min track: ~50 s (target < 2 min) |
+| `deep` | + CLAP tags and PNG plots | 3-min track: ~50–60 s (target < 4 min) |
 
+Measured on an M1 / 16 GB with forced recomputation; "warm" = models already loaded, as in the long-running MCP server.
 Every stage is cached under `<cache>/<track-id>/stages/` (keyed by audio hash + stage version), so re-runs, deeper
 re-runs and code upgrades only recompute what changed. The track id is a hash of the decoded PCM, so renamed or
 moved copies of the same file reuse the cache.
@@ -171,17 +172,30 @@ MSAF → own novelty segmentation; Essentia TF taggers → CLAP via transformers
 
 ## Accuracy
 
-`uv run python scripts/validate.py --real` renders the five ground-truth songs (`audioref demo …`: swung house with
-sidechain/build/stop, laid-back hip hop, 3/4 waltz, techno with 2-bar harmonic rhythm, drifting "live" take), runs the
-full pipeline and each stage on true stems, and writes [docs/VALIDATION.md](docs/VALIDATION.md). Headlines: tempo within
-0.1 bpm, beat grids within ~2 ms, swing within ±0.01, microtiming within ~1 ms, keys and chord loops exact on all five
-songs, drum F1 ≥ 0.95 for core voices on clean stems. Real CC-licensed recordings (librosa examples) are analysed in the
-same report.
+`uv run python scripts/validate.py --real` renders five ground-truth songs (`audioref demo …`: swung house with
+sidechain/build/stop, laid-back hip hop, 3/4 waltz, techno with a 2-bar harmonic rhythm, a drifting "live" take), runs
+the full standard pipeline on the mixes plus each stage on the true stems, analyses six CC-licensed real recordings, and
+writes [docs/VALIDATION.md](docs/VALIDATION.md). Current results on the mixed audio (Demucs + Beat This! + Basic Pitch):
 
-Known limits: dense real mixes reduce chord-extension and drum-voice accuracy (always check `confidence` / `warnings`);
-percussion that never sounds alone (a shaker always layered on hats) may not get its own voice; crash detection is
-coarse; release times measured on pads read long (note envelopes); half/double-time is ambiguous by nature — both
-readings are reported.
+| metric (5 songs, full pipeline) | result |
+|---|---|
+| tempo (±2 %) / meter | 5/5 exact (≤ 0.05 bpm off), 5/5 meters incl. 3/4 |
+| beat F-measure / median beat error | 1.00 / 0.1–2.3 ms |
+| downbeat F-measure | 1.00 |
+| swing ratio error | ≤ 0.003 (house 58 %, hip hop 62 %) |
+| key / chord loop | 5/5 / 5/5 (e.g. house `Bbmaj9 – Am9 – Gm9 – C13` = `IVmaj9 – iiim9 – iim9 – V13`) |
+| chords (beat-sampled majmin / sevenths) | 0.90–1.00 / 0.90–1.00 |
+| drum F1 kick · clap · hats · snare | 0.99–1.00 · 0.97–0.98 · 0.78–0.96 · 0.70–0.89 |
+| sections (±1 bar) | house 7/7, techno 6/6, waltz 3/3, live 2/2, hip hop 3/5 |
+| microtiming vs kick (true stems) | within ~1–2 ms (clap +8.3 vs +10, snare +17.6 vs +17, hats +5.2 vs +5) |
+
+On true stems (isolating each stage) drum F1 is 0.91–1.00 for every voice.
+
+Known limits: Demucs routes tonal percussion (rim clicks, cowbells, toms) into the "other" stem, so they can be missing
+from drum grids at `standard` depth (the HPSS path used by `quick` keeps them); sections that differ only by a quiet lead
+line (hip-hop hook) may merge; percussion that never sounds alone (a shaker always layered on hats) does not get its own
+voice; crash detection is coarse; sidechain release measured on pads reads long (note envelopes); half/double tempo is
+ambiguous by nature, so both readings are reported. Always check `confidence` and `warnings` in the analysis.
 
 ## Configuration
 

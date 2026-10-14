@@ -68,9 +68,15 @@ class Service:
         out = {"track_id": r["track_id"], "name": r["analysis"]["track"]["name"], "files": r["files"]}
         if brief:
             out["brief_md"] = tc.brief_path.read_text() if tc.brief_path.is_file() else ""
-        out["analysis"] = trim_analysis(r["analysis"]) if trim else r["analysis"]
+        if trim:
+            # the brief already carries the detail; keep the tool result inside the ~4k-token budget
+            out["summary"] = summarize_analysis(r["analysis"])
+            out["more"] = ("get_analysis(track_id) for the trimmed analysis, get_analysis(track_id, fields=[JSONPath]) for "
+                           "slices, get_drum_grid / get_chords / get_midi for parts, or resource audioref://track/<id>/analysis")
+        else:
+            out["analysis"] = r["analysis"]
         if not brief:
-            out["summary"] = tc.read_meta().get("summary")
+            out["summary_line"] = tc.read_meta().get("summary")
         return out
 
     def submit_analyze(self, **kw: Any) -> str:
@@ -276,6 +282,26 @@ class Service:
 
     def files(self, track: str) -> dict:
         return list_files(self._tc(track))
+
+
+def summarize_analysis(a: dict) -> dict:
+    """The handful of fields an agent needs first (everything else is in the brief or get_analysis)."""
+    r, h, st = a["rhythm"], a["harmony"], a["structure"]
+    sw = r.get("swing") or {}
+    return {
+        "duration_s": a["track"].get("duration_s"), "loudness_lufs": (a["track"].get("loudness") or {}).get("integrated_lufs"),
+        "bpm": r.get("bpm"), "meter": r.get("meter"), "first_downbeat_s": r.get("first_downbeat"),
+        "swing": {k: sw.get(k) for k in ("level", "percent", "feel")}, "microtiming_ms": r.get("microtiming_ms"),
+        "key": h.get("key"), "key_confidence": h.get("key_confidence"),
+        "loop": {k: (h.get("loop") or {}).get(k) for k in ("symbols", "roman", "length_bars")},
+        "sections": [f"{s['label']} {s['start_bar'] + 1}-{s['end_bar']}" for s in st.get("sections", [])],
+        "events": [e["type"] + "@bar" + str((e.get("bar") if e.get("bar") is not None else e.get("start_bar", -1)) + 1)
+                   for e in st.get("events", [])][:12],
+        "tags": {k: (a["sound"].get("tags") or {}).get(k) for k in ("genre", "instruments", "mood", "method")},
+        "methods": a["generator"].get("methods"), "depth": a["generator"].get("depth"),
+        "confidence": {k: v.get("level") for k, v in (a.get("confidence") or {}).items()},
+        "warnings": (a.get("warnings") or [])[:6],
+    }
 
 
 def _hash(obj: Any) -> str:
