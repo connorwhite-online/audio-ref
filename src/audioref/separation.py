@@ -31,7 +31,7 @@ def demucs_separate(stereo: np.ndarray, sr: int, model_name: str = "htdemucs", d
     from demucs.apply import apply_model
 
     dev = models.torch_device(device)
-    model = models.get(f"demucs:{model_name}", lambda: _load_demucs(model_name, dev))
+    model = models.get(f"demucs:{model_name}", lambda: models.local_first(lambda: _load_demucs(model_name, dev)))
     if sr != model.samplerate:
         raise ValueError(f"demucs expects {model.samplerate} Hz")
     wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import threading
@@ -12,6 +13,8 @@ from .util import log
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 _lock = threading.RLock()
 _models: dict[str, Any] = {}
@@ -47,6 +50,32 @@ def torch_device(pref: str = "auto") -> str:
     except Exception:
         pass
     return "cpu"
+
+
+@contextlib.contextmanager
+def hf_offline():
+    """Temporarily force huggingface_hub into offline mode (cache only, no network)."""
+    try:
+        import huggingface_hub.constants as hfc
+    except ImportError:  # pragma: no cover
+        yield
+        return
+    old = hfc.HF_HUB_OFFLINE
+    hfc.HF_HUB_OFFLINE = True
+    try:
+        yield
+    finally:
+        hfc.HF_HUB_OFFLINE = old
+
+
+def local_first(loader: Callable[[], Any]) -> Any:
+    """Load from local caches without touching the network; only go online if that fails (first use)."""
+    try:
+        with hf_offline():
+            return loader()
+    except Exception as e:  # not cached yet
+        log.info("model not in local cache (%s); downloading", type(e).__name__)
+        return loader()
 
 
 def get(name: str, loader: Callable[[], Any]) -> Any:

@@ -49,6 +49,10 @@ packages = ["src/audioref"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+  "ignore:pkg_resources is deprecated:UserWarning",
+  "ignore::DeprecationWarning:resampy",
+]
 markers = [
   "slow: tests that run full pipelines or ML models",
   "models: tests that need optional ML models (demucs, basic-pitch, beat-this, CLAP)",

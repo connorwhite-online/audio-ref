@@ -8,7 +8,7 @@ from scipy import ndimage, signal
 from . import models
 from .util import log
 
-VERSION = "4"
+VERSION = "5"
 SR = 22050
 
 GENRES = ["house", "deep house", "tech house", "techno", "trance", "drum and bass", "dubstep", "trap", "hip hop",
@@ -175,11 +175,16 @@ def space_estimate(y: np.ndarray, sr: int = SR) -> dict:
 
 
 # ------------------------------------------------------------------ sidechain
-def sidechain(y: np.ndarray, kick_times: list[float], sr: int = SR) -> dict | None:
+def sidechain(y: np.ndarray, kick_times: list[float], sr: int = SR, band: tuple[float, float] = (150.0, 1500.0)) -> dict | None:
     """Average level of a non-drum signal around kick hits: a dip right after the kick that recovers
-    over ~50-300 ms is a sidechain pump. Compared against random control times."""
+    over ~50-300 ms is a sidechain pump. Compared against random control times.
+
+    Measured in a band above the kick's fundamental and ignoring the first 15 ms after each kick, because
+    separated stems carry kick bleed (low thump, click) exactly where the duck is."""
     if y is None or not kick_times or len(kick_times) < 8 or np.max(np.abs(y)) < 1e-4:
         return None
+    sos = signal.butter(4, [band[0] / (sr / 2), min(band[1] / (sr / 2), 0.99)], "bandpass", output="sos")
+    y = signal.sosfiltfilt(sos, np.asarray(y, dtype=np.float64))
     hop = int(0.004 * sr)
     frame = int(0.012 * sr)
     env = np.sqrt(ndimage.uniform_filter1d(y.astype(np.float64) ** 2, frame)[::hop] + 1e-12)
@@ -190,7 +195,9 @@ def sidechain(y: np.ndarray, kick_times: list[float], sr: int = SR) -> dict | No
     win = int(min(0.45, float(np.median(gaps)) * 0.95) * fps) if len(gaps) else int(0.4 * fps)
     pre = int(0.03 * fps)
 
-    def curve(times):
+    seg_store: list[np.ndarray] = []
+
+    def curve(times, keep=False):
         segs = []
         for t in times:
             i = int(t * fps)
@@ -201,26 +208,45 @@ def sidechain(y: np.ndarray, kick_times: list[float], sr: int = SR) -> dict | No
             if ref < db.max() - 45:  # silence: no information
                 continue
             segs.append(seg - ref)
+        if keep:
+            seg_store.extend(segs)
         return np.median(np.array(segs), axis=0) if len(segs) >= 6 else None
 
-    c = curve(k)
+    c = curve(k, keep=True)
     if c is None:
         return None
     rng = np.random.default_rng(0)
     span = (k.min(), k.max())
-    ctrl_t = rng.uniform(span[0], span[1], size=len(k))
-    ctrl_t = ctrl_t[np.min(np.abs(ctrl_t[:, None] - k[None, :]), axis=1) > 0.08]
+    ctrl_t = rng.uniform(span[0], span[1], size=4 * len(k))
+    # control windows must not contain a kick (else they show the same duck)
+    d = ctrl_t[:, None] - k[None, :]
+    ctrl_t = ctrl_t[~np.any((d > -0.05) & (d < 0.25), axis=1)][: len(k)]
     cc = curve(ctrl_t)
-    post = c[pre:]
-    j = int(np.argmin(post[: int(0.12 * fps)]))
-    depth = float(-post[j])
-    ctrl_depth = float(-np.min(cc[pre: pre + int(0.12 * fps)])) if cc is not None else 0.0
+    skip = int(0.015 * fps)  # onset bleed from the kick itself
+    hi = int(0.08 * fps)
+
+    def v_shape(cur):
+        post = cur[pre:]
+        j = skip + int(np.argmin(post[skip:hi]))
+        depth = float(-post[j])
+        rec_win = post[j + int(0.04 * fps): j + int(0.3 * fps)]
+        recovery = float(rec_win.max() - post[j]) if rec_win.size else 0.0
+        return j, depth, recovery, post
+
+    j, depth, recovery, post = v_shape(c)
+    ctrl_depth = v_shape(cc)[1] if cc is not None else 0.0
     # release: time from the dip until 63 % of the depth has been recovered
-    target = post[j] + 0.63 * depth
+    target = post[j] + 0.63 * max(depth, 0)
     rec = np.where(post[j:] >= target)[0]
     release = float(rec[0] / fps * 1000) if len(rec) else float(len(post[j:]) / fps * 1000)
-    detected = (depth > 1.5 and depth - ctrl_depth > 1.0 and 0.004 <= j / fps < 0.08 and release >= 25)
-    return {"detected": bool(detected), "depth_db": round(depth, 1) if detected else round(max(depth, 0), 1),
+    # a pump ducks after (nearly) every kick; musical gaps only line up with some of them
+    hits = 0
+    for sgm in seg_store:
+        jj, dd, rr, _ = v_shape(sgm)
+        hits += dd >= max(1.0, 0.5 * depth) and rr >= 0.5
+    consistency = hits / max(len(seg_store), 1)
+    detected = depth >= 1.5 and recovery >= 1.0 and depth - ctrl_depth >= 0.7 and release >= 25 and consistency >= 0.6
+    return {"detected": bool(detected), "depth_db": round(max(depth, 0.0), 1), "consistency": round(consistency, 2),
             "release_ms": round(release, 0) if detected else None, "dip_at_ms": round(j / fps * 1000, 0),
             "control_depth_db": round(ctrl_depth, 1)}
 
@@ -229,8 +255,12 @@ def sidechain(y: np.ndarray, kick_times: list[float], sr: int = SR) -> dict | No
 def _load_clap(name: str, device: str):
     from transformers import ClapModel, ClapProcessor
 
-    proc = ClapProcessor.from_pretrained(name)
-    model = ClapModel.from_pretrained(name).eval()
+    try:  # cache first: no network once the weights are downloaded
+        proc = ClapProcessor.from_pretrained(name, local_files_only=True)
+        model = ClapModel.from_pretrained(name, local_files_only=True).eval()
+    except Exception:
+        proc = ClapProcessor.from_pretrained(name)
+        model = ClapModel.from_pretrained(name).eval()
     return model, proc
 
 
