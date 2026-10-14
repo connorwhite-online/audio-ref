@@ -51,7 +51,7 @@ class Pipeline:
     # ------------------------------------------------------------------ public
     def analyze(self, path: str | Path, depth: str | None = None, start: float | None = None, end: float | None = None,
                 stems: bool = False, plots: bool | None = None, force: bool = False,
-                progress: Progress | None = None) -> dict:
+                progress: Progress | None = None, name: str | None = None) -> dict:
         """Analyze a file. Returns {'track_id', 'cache': TrackCache, 'analysis': dict, 'files': dict}."""
         depth = depth or self.cfg.default_depth
         if depth not in DEPTHS:
@@ -66,6 +66,7 @@ class Pipeline:
         t_start = time.time()
         progress(0.01, "decoding")
         audio = ingest.load(path, start, end)
+        audio.label = (name or "").strip() or path.stem
         tc = TrackCache(self.root, audio.track_id)
         fp = CacheIndex.fingerprint(path, start, end)
         meta = tc.read_meta()
@@ -76,9 +77,11 @@ class Pipeline:
                 and (not stems or meta.get("stems_exported")) and (not want_plots or meta.get("plots"))):
             progress(1.0, "cached")
             self.index.record(fp, audio.track_id)
+            if name and meta.get("name") != audio.label:
+                self._rename(tc, audio.label)
             return self._result(tc)
         tc.dir.mkdir(parents=True, exist_ok=True)
-        tc.write_meta({**meta, "track_id": audio.track_id, "name": path.stem, "path": str(path.resolve()),
+        tc.write_meta({**meta, "track_id": audio.track_id, "name": audio.label, "path": str(path.resolve()),
                        "start": audio.start, "end": audio.end, "duration_s": round(audio.duration, 3),
                        "created": meta.get("created", time.time()), "status": "running", "depth_requested": depth})
         self.index.record(fp, audio.track_id)
@@ -99,6 +102,16 @@ class Pipeline:
                        summary=_summary_line(analysis))
         progress(1.0, "done")
         return self._result(tc)
+
+    def _rename(self, tc: TrackCache, name: str) -> None:
+        from .brief import make_brief
+        from .util import read_json
+
+        a = read_json(tc.analysis_path)
+        a["track"]["name"] = name
+        write_json(tc.analysis_path, a, ndigits=4, indent=1)
+        tc.brief_path.write_text(make_brief(a))
+        tc.update_meta(name=name)
 
     def _result(self, tc: TrackCache) -> dict:
         from .util import read_json
@@ -361,7 +374,7 @@ def assemble(audio, tc, depth, rh, dr, gr, dsound, ha, bass_info, voicing, melod
         "schema_version": SCHEMA_VERSION,
         "generator": {"name": "audioref", "version": __version__, "depth": depth, "methods": methods,
                       "created": time.strftime("%Y-%m-%dT%H:%M:%S")},
-        "track": {"id": audio.track_id, "name": audio.path.stem, "path": str(audio.path.resolve()),
+        "track": {"id": audio.track_id, "name": getattr(audio, "label", audio.path.stem), "path": str(audio.path.resolve()),
                   "start": audio.start, "end": audio.end, "duration_s": round(audio.duration, 3),
                   "sample_rate": audio.sr, "loudness": {k: v for k, v in audio.loudness.items()},
                   "analysis_gain_db": round(audio.gain_db, 2)},

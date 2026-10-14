@@ -66,7 +66,7 @@ def cmd_analyze(args) -> int:
     for path in args.paths:
         sys.stderr.write(f"analyzing {path} ({args.depth or svc.cfg.default_depth})\n")
         r = svc.analyze(path, args.depth, args.start, args.end, args.stems, args.plots, args.force,
-                        _progress_printer(args.quiet), trim=not args.full_json)
+                        _progress_printer(args.quiet), trim=not args.full_json, name=args.name)
         results.extend(r if isinstance(r, list) else [r])
     if args.out:
         out_root = Path(args.out).expanduser()
@@ -243,6 +243,63 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_record(args) -> int:
+    import threading
+
+    from . import capture as cap
+
+    svc = _svc(args)
+    sys.stderr.write("● Listening for system audio: press play on the track now (Ctrl-C stops early).\n")
+    result: dict = {}
+    error: list[BaseException] = []
+
+    def work():
+        try:
+            result.update(svc.capture(args.name, args.max_seconds, args.silence, args.wait, args.depth,
+                                      not args.no_analyze, args.via, args.simulate, _progress_printer(args.quiet)))
+        except BaseException as e:  # surfaced below
+            error.append(e)
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    try:
+        while t.is_alive():
+            t.join(0.2)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nstopping capture…\n")
+        cap.stop()
+        t.join()
+    if error:
+        raise error[0] if not isinstance(error[0], cap.CaptureError) else RuntimeError(str(error[0]))
+    if args.json:
+        _print(result)
+    elif "track_id" in result:
+        _print(result.get("brief_md") or svc.get_brief(result["track_id"]), as_json=False)
+        rec = result["capture"]
+        sys.stdout.write(f"\n[track_id {result['track_id']}] captured {rec['duration']:.1f}s via {rec['via']}: {rec['path']}\n")
+    else:
+        sys.stdout.write(f"captured {result['capture']['duration']:.1f}s: {result['path']}\n")
+    return 0
+
+
+def cmd_app(args) -> int:
+    from . import app as app_mod
+    from . import capture as cap
+
+    if args.action == "build":
+        _print({"built": str(app_mod.build(verbose=args.verbose))})
+    elif args.action == "install":
+        _print(app_mod.install(cache_dir=args.app_cache))
+    elif args.action == "open":
+        _print({"running": cap.launch_app()})
+    elif args.action == "uninstall":
+        _print(app_mod.uninstall())
+    else:
+        _print({"app_installed": str(cap.installed_app()) if cap.installed_app() else None,
+                "app_running": cap.app_status(), "helper": str(cap.find_helper()) if cap.find_helper() else None})
+    return 0
+
+
 def cmd_mcp(args) -> int:
     from .mcp_server import main as mcp_main
 
@@ -286,6 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--out-per-track", action="store_true", help="always create a sub-folder per track under --out")
     a.add_argument("--full-json", action="store_true", help="with --json: include the full analysis instead of a summary")
     a.add_argument("--separation", choices=["htdemucs", "htdemucs_6s", "htdemucs_ft", "none"])
+    a.add_argument("--name", help="display name for the track (default: file name)")
     a.add_argument("--allow-download", action="store_true", help="allow http(s) URLs (only audio you own/have rights to)")
     a.add_argument("-q", "--quiet", action="store_true")
     a.set_defaults(func=cmd_analyze)
@@ -357,6 +415,24 @@ def build_parser() -> argparse.ArgumentParser:
     de.add_argument("out")
     de.add_argument("--stems", help="also write the true stems to this folder")
     de.set_defaults(func=cmd_demo)
+
+    rc = sub.add_parser("record", help="record what's playing on this Mac (system audio) and analyze it")
+    rc.add_argument("--name", help="track name for the analysis")
+    rc.add_argument("--max-seconds", type=float, default=600)
+    rc.add_argument("--silence", type=float, default=3.0, help="stop after this many seconds of silence (0 = never)")
+    rc.add_argument("--wait", type=float, default=60.0, help="give up if nothing plays within this many seconds")
+    rc.add_argument("--depth", choices=DEPTHS)
+    rc.add_argument("--no-analyze", action="store_true", help="just record the WAV")
+    rc.add_argument("--via", choices=["auto", "app", "helper"], default="auto",
+                    help="capture through the AudioRef menu bar app (auto) or the headless helper")
+    rc.add_argument("--simulate", help=argparse.SUPPRESS)
+    rc.add_argument("-q", "--quiet", action="store_true")
+    rc.set_defaults(func=cmd_record)
+
+    ap = sub.add_parser("app", help="AudioRef menu bar app: build | install | open | status | uninstall")
+    ap.add_argument("action", choices=["build", "install", "open", "status", "uninstall"])
+    ap.add_argument("--app-cache", default="~/.audioref", help="analysis cache the app uses (shared with agents)")
+    ap.set_defaults(func=cmd_app)
 
     sub.add_parser("mcp", help="run the MCP server on stdio").set_defaults(func=cmd_mcp)
     return p

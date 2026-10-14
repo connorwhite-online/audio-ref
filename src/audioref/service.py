@@ -47,7 +47,8 @@ class Service:
     # ------------------------------------------------------------------ analyze
     def analyze(self, path: str, depth: str | None = None, start: float | None = None, end: float | None = None,
                 stems: bool = False, plots: bool | None = None, force: bool = False,
-                progress: Callable[[float, str], None] | None = None, trim: bool = True) -> dict | list[dict]:
+                progress: Callable[[float, str], None] | None = None, trim: bool = True,
+                name: str | None = None) -> dict | list[dict]:
         """Analyze a file (or every audio file in a folder)."""
         p = Path(str(path)).expanduser()
         if not ingest.is_url(str(path)) and p.is_dir():
@@ -60,7 +61,7 @@ class Service:
                 r = self.pipeline.analyze(f, depth, start, end, stems, plots, force, sub)
                 out.append(self._result(r, trim=True, brief=False))
             return out
-        r = self.pipeline.analyze(str(path), depth, start, end, stems, plots, force, progress)
+        r = self.pipeline.analyze(str(path), depth, start, end, stems, plots, force, progress, name=name)
         return self._result(r, trim=trim)
 
     def _result(self, r: dict, trim: bool = True, brief: bool = True) -> dict:
@@ -78,6 +79,39 @@ class Service:
         if not brief:
             out["summary_line"] = tc.read_meta().get("summary")
         return out
+
+    # ------------------------------------------------------------------ system-audio capture
+    def capture(self, name: str | None = None, max_seconds: float = 600, stop_on_silence: float = 3.0,
+                wait_for_audio: float = 60, depth: str | None = None, analyze: bool = True, via: str = "auto",
+                simulate: str | None = None, progress: Callable[[float, str], None] | None = None) -> dict:
+        """Record what is playing on this Mac, then analyze it (unless analyze=False)."""
+        from . import capture as cap
+
+        progress = progress or (lambda f, m: None)
+        label = (name or "").strip()
+        out = self.root / "captures" / f"{_slug(label) or 'capture'}-{time.strftime('%Y%m%d-%H%M%S')}.wav"
+
+        def on_event(ev: dict) -> None:
+            e = ev.get("event")
+            if e == "waiting":
+                progress(0.01, "listening: press play on the track now")
+            elif e == "started":
+                progress(0.02, "recording")
+            elif e == "level":
+                progress(0.02, f"recording {ev.get('elapsed', 0):.0f}s ({ev.get('db', -120):.0f} dB)")
+
+        rec = cap.capture(out, max_seconds, stop_on_silence, wait_for_audio, simulate=simulate, on_event=on_event, via=via)
+        progress(0.05, f"captured {rec['duration']:.1f}s ({rec['reason']})")
+        if not analyze:
+            return {"capture": rec, "path": rec["path"]}
+        sub = (lambda f, m: progress(0.05 + 0.95 * f, m))
+        res = self.analyze(rec["path"], depth, progress=sub, name=label or None)
+        res["capture"] = rec
+        return res
+
+    def submit_capture(self, **kw: Any) -> str:
+        params = {k: v for k, v in kw.items() if k != "progress"}
+        return self.jobs.submit("capture_audio", lambda progress, **k: self.capture(progress=progress, **k), params, **kw)
 
     def submit_analyze(self, **kw: Any) -> str:
         params = {k: v for k, v in kw.items() if k != "progress"}
@@ -302,6 +336,12 @@ def summarize_analysis(a: dict) -> dict:
         "confidence": {k: v.get("level") for k, v in (a.get("confidence") or {}).items()},
         "warnings": (a.get("warnings") or [])[:6],
     }
+
+
+def _slug(s: str) -> str:
+    import re
+
+    return re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-")[:60]
 
 
 def _hash(obj: Any) -> str:

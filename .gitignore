@@ -17,3 +17,7 @@ dist/
 tests/.fixtures/
 
 .DS_Store
+
+# macOS app build products
+macos/AudioRef/.build/
+macos/AudioRef/build/

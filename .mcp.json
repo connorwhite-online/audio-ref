@@ -2,7 +2,14 @@
   "mcpServers": {
     "audioref": {
       "command": "uv",
-      "args": ["run", "--directory", ".", "audioref-mcp", "--cache", ".audioref"]
+      "args": [
+        "run",
+        "--directory",
+        ".",
+        "audioref-mcp",
+        "--cache",
+        "~/.audioref"
+      ]
     }
   }
 }

@@ -45,12 +45,39 @@ The extras are optional; without them the analyzer still works with built-in fal
 Model weights download once on first use and are then loaded from the local cache with **no network access**
 (the loaders force Hugging Face offline mode first).
 
+## Capture from your Mac (menu bar app)
+
+No file? Play the reference anywhere on the Mac (Spotify, YouTube, Music, a DAW…) and let AudioRef record the system
+audio directly — digitally, no microphone, no downloading.
+
+```bash
+uv run audioref app install      # builds macos/AudioRef → ~/Applications/AudioRef.app and launches it
+```
+
+A waveform icon appears in the menu bar. Click it, optionally name the track, press **Capture**, then press play.
+Recording starts with the sound, stops after a few seconds of silence (or press Stop), and the clip is analysed; the
+result appears under **Recent** with BPM/key/loop and buttons to open the brief, copy the track id for your agent, or
+show the files. Settings (gear): silence timeout, max length, open at login.
+
+- **Permission:** the first capture triggers macOS's *Screen & System Audio Recording* prompt. Enable **AudioRef**
+  (System Settings → Privacy & Security), then quit and reopen it. AudioRef records sound only, never the screen,
+  and excludes its own audio.
+- **Shared cache:** the app analyses into `~/.audioref`, the same cache the MCP server in `.mcp.json` uses, so agents
+  see every capture (`list_tracks`, `get_brief`).
+- **Agents** can start a capture themselves with the `capture_audio` MCP tool (it asks you to press play) and
+  `stop_capture`; scripts can use `audioref record --name "Ref A"`. Both go through the running app (so only AudioRef
+  needs the permission) and fall back to the bundled headless `audioref-capture` helper.
+- Builds are signed with your Apple Development certificate when the keychain allows it, otherwise ad-hoc; with ad-hoc
+  signing macOS may ask for the permission again after a rebuild. `audioref app status | open | uninstall`.
+
+Captures are local WAV files in `~/.audioref/captures/`; record only audio you have the right to use.
+
 ## Use from Claude Code (MCP)
 
 This repo ships a `.mcp.json` that runs the server from the checkout:
 
 ```json
-{ "mcpServers": { "audioref": { "command": "uv", "args": ["run", "--directory", ".", "audioref-mcp", "--cache", ".audioref"] } } }
+{ "mcpServers": { "audioref": { "command": "uv", "args": ["run", "--directory", ".", "audioref-mcp", "--cache", "~/.audioref"] } } }
 ```
 
 With a global install (`uv tool install ".[all]"`) use the spec's form instead:
@@ -61,6 +88,7 @@ With a global install (`uv tool install ".[all]"`) use the spec's form instead:
 
 | tool | what it does |
 |---|---|
+| `capture_audio(name?, max_seconds?, stop_on_silence_s?, wait_for_audio_s?, depth?, analyze?)` | record what's playing on the Mac (user presses play), then analyze it; `stop_capture()` ends it early |
 | `analyze_track(path, depth?, start?, end?, stems?, plots?, force?, wait_s?)` | analyze a file or folder → `brief_md`, trimmed analysis, file paths. Long runs return a `job_id` and stream progress. |
 | `get_job(job_id, wait_s?)` | status / result of a background analysis |
 | `get_analysis(track_id, fields?)` | JSONPath slices of `analysis.json` (`rhythm.swing`, `harmony.chords[0:8]`, `structure.sections[*].label`, `drums.patterns[?(@.id=='A')]`) |
@@ -84,6 +112,7 @@ Typical agent flow: `analyze_track` ×3 → read the briefs → `blend_reference
 ## Use from the shell (CLI)
 
 ```bash
+audioref record --name "Ref A"                                            # capture what's playing, then analyze
 audioref analyze refs/a.mp3 refs/b.mp3 --depth standard --out analysis/   # brief to stdout, files to analysis/
 audioref analyze refs/ --depth quick                                      # a whole folder
 audioref analyze long.mp3 --start 60 --end 120 --plots                    # just a section, with PNG plots

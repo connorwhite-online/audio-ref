@@ -21,10 +21,12 @@ from mcp.types import ToolAnnotations
 
 from . import __version__
 from .config import load_config
+from .capture import CaptureError
 from .ingest import IngestError
 
 INSTRUCTIONS = """\
 audio-ref lets you "listen" to reference tracks. Typical flow:
+0. No file? capture_audio(name) records what the user plays on this Mac (ask them to press play), then analyzes it.
 1. analyze_track(path) for each reference (depth: quick ~tempo/key/chords/energy, standard = + stems, drums, bass,
    transcription, MIDI [default], deep = + CLAP tags + plots). Read the returned brief_md first.
 2. Drill down with get_drum_grid / get_chords / get_midi / get_analysis(fields=[JSONPath...]).
@@ -62,7 +64,7 @@ def _tool_errors(fn):
             raise
         except KeyError as e:
             raise ToolError(e.args[0] if e.args else str(e)) from e
-        except (ValueError, FileNotFoundError, IngestError, RuntimeError) as e:
+        except (ValueError, FileNotFoundError, IngestError, CaptureError, RuntimeError) as e:
             raise ToolError(str(e)) from e
 
     return wrapper
@@ -91,7 +93,7 @@ async def _wait_job(job_id: str, wait_s: float, ctx: Context | None) -> dict:
                     "hint": "still running: call get_job(job_id, wait_s=...) to wait for the result"}
         await asyncio.sleep(0.4)
     if job.status == "error":
-        raise ToolError(f"analysis failed: {job.error}")
+        raise ToolError(f"{job.kind} failed: {job.error}")
     return job.result
 
 
@@ -107,6 +109,34 @@ async def analyze_track(path: str, depth: str = "standard", start: float | None 
     s = svc()
     job_id = s.submit_analyze(path=path, depth=depth, start=start, end=end, stems=stems, plots=plots, force=force)
     return await _wait_job(job_id, max(0.0, float(wait_s)), ctx)
+
+
+@server.tool(description="Record whatever is playing on this Mac (system audio) and analyze it: no downloading needed. "
+             "Right after calling, ask the user to press play on their reference (Spotify, YouTube, Music, ...). "
+             "Recording starts when sound starts and stops after stop_on_silence_s seconds of silence or max_seconds; "
+             "the WAV is then analyzed like analyze_track (name labels it). Uses the AudioRef menu bar app if installed "
+             "(it needs macOS Screen & System Audio Recording permission). Waits up to wait_s, then returns a job_id "
+             "for get_job; stop_capture ends the recording early.")
+@_tool_errors
+async def capture_audio(name: str | None = None, max_seconds: float = 600, stop_on_silence_s: float = 3.0,
+                        wait_for_audio_s: float = 90, depth: str = "standard", analyze: bool = True,
+                        wait_s: float = 50.0, ctx: Context | None = None) -> dict:
+    s = svc()
+    job_id = s.submit_capture(name=name, max_seconds=max_seconds, stop_on_silence=stop_on_silence_s,
+                              wait_for_audio=wait_for_audio_s, depth=depth, analyze=analyze)
+    res = await _wait_job(job_id, max(0.0, float(wait_s)), ctx)
+    if "job_id" in res:
+        res["hint"] = ("capturing: make sure the user pressed play; call get_job(job_id, wait_s=...) for the result "
+                       "or stop_capture() to end the recording now")
+    return res
+
+
+@server.tool(description="Stop the system-audio capture in progress (what was recorded so far is kept and analyzed).")
+@_tool_errors
+async def stop_capture() -> dict:
+    from . import capture as cap
+
+    return {"stopped": await _run(cap.stop)}
 
 
 @server.tool(description="Status/result of a background job (from analyze_track). wait_s > 0 waits for completion.",
