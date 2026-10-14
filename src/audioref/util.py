@@ -125,7 +125,8 @@ def median_or(x: Iterable[float], default: float | None = None) -> float | None:
 
 
 def otsu_threshold(x: np.ndarray, bins: int = 64) -> float:
-    """Otsu's method on a 1-D sample (used for adaptive present/absent splits)."""
+    """Otsu's method on a 1-D sample (used for adaptive present/absent splits). When the classes are well
+    separated every threshold in the gap is optimal; return the middle of that plateau."""
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
     if x.size < 2 or np.ptp(x) < 1e-12:
@@ -133,20 +134,18 @@ def otsu_threshold(x: np.ndarray, bins: int = 64) -> float:
     hist, edges = np.histogram(x, bins=bins)
     centers = 0.5 * (edges[1:] + edges[:-1])
     w = hist.astype(float)
-    total = w.sum()
-    best, thr = -1.0, float(centers[0])
-    cum_w = np.cumsum(w)
-    cum_m = np.cumsum(w * centers)
-    for i in range(1, bins):
-        w0, w1 = cum_w[i - 1], total - cum_w[i - 1]
-        if w0 == 0 or w1 == 0:
-            continue
-        m0 = cum_m[i - 1] / w0
-        m1 = (cum_m[-1] - cum_m[i - 1]) / w1
-        between = w0 * w1 * (m0 - m1) ** 2
-        if between > best:
-            best, thr = between, float(edges[i])
-    return thr
+    cum_w = np.cumsum(w)[:-1]
+    cum_m = np.cumsum(w * centers)[:-1]
+    total_w, total_m = w.sum(), (w * centers).sum()
+    w0, w1 = cum_w, total_w - cum_w
+    valid = (w0 > 0) & (w1 > 0)
+    m0 = np.where(valid, cum_m / np.maximum(w0, 1e-12), 0)
+    m1 = np.where(valid, (total_m - cum_m) / np.maximum(w1, 1e-12), 0)
+    between = np.where(valid, w0 * w1 * (m0 - m1) ** 2, -1)
+    best = between.max()
+    idx = np.where(between >= best * (1 - 1e-9))[0]
+    cand = edges[1:-1][idx]
+    return float(0.5 * (cand.min() + cand.max()))
 
 
 def frames_to_time(frames, sr: int, hop: int):

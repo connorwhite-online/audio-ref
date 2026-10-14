@@ -7,7 +7,7 @@ import numpy as np
 from .theory import FAMILY, QUALITIES, Chord, Key, roman, spell_chord
 from .util import mode
 
-VERSION = "3"
+VERSION = "4"
 SR = 22050
 HOP = 512
 BPO = 36  # CQT bins per octave (3 per semitone)
@@ -234,7 +234,8 @@ def find_loop(bar_chords: list[tuple], max_len: int = 8, tonic_pc: int | None = 
     good = [L for L in sorted(scores) if scores[L] >= 0.75]
     L = good[0] if good else max(scores, key=lambda k: scores[k])
     best = {"length_bars": L, "agreement": scores[L]}
-    # choose the window phase with the most repetitions (ties: starts on the tonic, then earliest)
+    # choose the window phase: (nearly) the most repetitions, then starting on the tonic, then aligned with
+    # the song's bar grid (loops usually start on phrase boundaries: bar 0, 4, 8, ...), then earliest
     cands = []
     for ph in range(L):
         windows = []
@@ -248,8 +249,12 @@ def find_loop(bar_chords: list[tuple], max_len: int = 8, tonic_pc: int | None = 
         count = sum(1 for _, w in windows if w == loop)
         first = min(st for st, w in windows if w == loop)
         starts_on_tonic = tonic_pc is not None and loop[0] and _root_pc(loop[0][0]) == tonic_pc
-        cands.append((count, starts_on_tonic, -first, loop))
-    cands.sort(reverse=True)
+        cands.append({"count": count, "tonic": bool(starts_on_tonic), "aligned": ph == 0, "first": first, "loop": loop})
+    if cands:
+        top = max(c["count"] for c in cands)
+        near = [c for c in cands if c["count"] >= top - 1]
+        near.sort(key=lambda c: (c["tonic"], c["aligned"], c["count"], -c["first"]), reverse=True)
+        cands = [(c["count"], c["tonic"], -c["first"], c["loop"]) for c in near]
     best["bars"] = list(cands[0][3]) if cands else [seq[valid[0]]]
     best["occurrences"] = cands[0][0] if cands else 1
     return best
@@ -262,17 +267,16 @@ def find_loop_chords(chords: list[dict], bar_len_s: float, tonic_pc: int | None 
     if len(seq) < 3:
         return None
     syms = [c["symbol"] for c in seq]
-    best = None
+    found = []
     for p_len in range(2, 9):
         counts: dict[tuple, list[int]] = {}
         for i in range(len(syms) - p_len + 1):
             g = tuple(syms[i: i + p_len])
-            if len(set(g)) < 2:
-                continue
+            if len(set(g)) < 2 or any(p_len % k == 0 and g == g[:k] * (p_len // k) for k in range(1, p_len)):
+                continue  # skip repetitions of a shorter cycle (A B A B)
             counts.setdefault(g, []).append(i)
         for g, idxs in counts.items():
-            # non-overlapping occurrences
-            occ, last = [], -10 ** 9
+            occ, last = [], -10 ** 9  # non-overlapping occurrences
             for i in idxs:
                 if i >= last + p_len:
                     occ.append(i)
@@ -280,11 +284,13 @@ def find_loop_chords(chords: list[dict], bar_len_s: float, tonic_pc: int | None 
             if len(occ) < 2:
                 continue
             cover = sum(seq[i + p_len - 1]["end"] - seq[i]["start"] for i in occ) / bar_len_s
-            key = (cover, -p_len)
-            if best is None or key > best["key"]:
-                best = {"key": key, "symbols": list(g), "occ": occ, "p": p_len}
-    if best is None:
+            found.append({"cover": cover, "symbols": list(g), "occ": occ, "p": p_len})
+    if not found:
         return None
+    top = max(f["cover"] for f in found)
+    # among near-best coverage prefer the longer cycle (more of the progression), then coverage
+    best = max((f for f in found if f["cover"] >= 0.9 * top), key=lambda f: (f["p"], f["cover"]))
+    best["key"] = (best["cover"],)
     g = best["symbols"]
     # rotate so it starts on the tonic when the tonic is in the cycle
     if tonic_pc is not None:

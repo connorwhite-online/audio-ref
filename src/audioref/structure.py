@@ -8,7 +8,7 @@ from scipy import ndimage, signal
 from . import loudness
 from .util import robust_norm
 
-VERSION = "3"
+VERSION = "4"
 SR = 22050
 
 
@@ -261,7 +261,7 @@ def analyze(mix: np.ndarray, sr: int, beats, downbeats, meter: int, stems: dict[
     layers = layer_activity(stems, mix, downbeats, sr, drum_hits, melody_notes)
     nb = len(downbeats)
     F = _bar_features(mix, sr, downbeats, chroma_beats, beats, layers)
-    starts = segment(F, layers)
+    starts = segment(F, layers, min_len=4 if nb >= 32 else 2)
     bounds = starts + [nb]
     # bar energy
     db_idx = np.array([int(np.argmin(np.abs(beats - d))) for d in downbeats])

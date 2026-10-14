@@ -193,9 +193,15 @@ class CacheIndex:
         matches = [t for t in tracks if t.track_id.startswith(ref)]
         if len(matches) == 1:
             return matches[0]
-        by_name = [t for t in tracks if t.read_meta().get("name") in (ref, Path(ref).name, Path(ref).stem)]
+        names = {t.track_id: (t.read_meta().get("name") or "") for t in tracks}
+        by_name = [t for t in tracks if names[t.track_id] in (ref, Path(ref).name, Path(ref).stem)]
         if len(by_name) == 1:
             return by_name[0]
+        low = ref.lower()
+        by_prefix = [t for t in tracks if names[t.track_id].lower().startswith(low)]
+        if len(by_prefix) == 1 and not matches:
+            return by_prefix[0]
+        by_name = by_name or by_prefix
         if len(matches) + len(by_name) > 1:
             raise KeyError(f"ambiguous track reference '{ref}'")
         raise KeyError(f"unknown track '{ref}' (run analyze first; list_tracks shows cached ids)")

@@ -34,7 +34,10 @@ audioref = "audioref.cli:main"
 audioref-mcp = "audioref.mcp_server:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-timeout>=2.3"]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+]
 
 [build-system]
 requires = ["hatchling"]

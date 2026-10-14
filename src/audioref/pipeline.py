@@ -15,7 +15,7 @@ from .config import DEPTHS, Config
 from .util import log, to_jsonable, write_json
 
 SCHEMA_VERSION = "1.0"
-ASSEMBLY_VERSION = "1"
+ASSEMBLY_VERSION = "2"
 
 
 def pipeline_version() -> str:
@@ -176,6 +176,11 @@ class Pipeline:
         ha = tc.cached(f"harmony-{tag}", harmony.VERSION + "." + rhythm.VERSION, lambda: harmony.analyze(
             harm_sig, beats, downbeats, meter, y_bass=st22.get("bass"), note_events=notes["keys"] or None), force)
         chords = ha.get("chords", [])
+        if not quick and "other" in st22 and not _active(st22["other"], mono, -24) and \
+                not any(k in st22 and _active(st22[k], mono, -24) for k in ("piano", "guitar")):
+            warnings.append("No chordal instruments detected (bass/drums only): chord qualities are implied by the bass "
+                            "line and are low-confidence; treat the loop as root movement.")
+            ha = {**ha, "confidence": min(ha.get("confidence") or 0.3, 0.3), "implied_by_bass": True}
         if quick or not notes["keys"]:
             X = (ha.get("_arrays") or {}).get("note_salience")
             if X is not None and not notes["keys"]:
@@ -227,8 +232,8 @@ class Pipeline:
         # ---- structure
         progress(0.9, "segmenting structure")
         tc_ = (ha.get("_arrays") or {}).get("treble_chroma")
-        electronic = _is_electronic(gr, rh)
-        stru = tc.cached(f"structure-{tag}", structure.VERSION + "." + rhythm.VERSION, lambda: structure.analyze(
+        electronic = _is_electronic(gr, rh, bool(notes["melody"]))
+        stru = tc.cached(f"structure-{tag}-{'edm' if electronic else 'song'}", structure.VERSION + "." + rhythm.VERSION, lambda: structure.analyze(
             mono, SR22, beats, downbeats, meter, {k: v for k, v in st22.items() if _active(v, mono)}, hits, gr,
             np.asarray(tc_) if tc_ is not None else None, notes["melody"] or None, audio.stereo, ingest.SR,
             electronic), force)
@@ -285,12 +290,12 @@ class Pipeline:
 
 
 # ---------------------------------------------------------------------- helpers
-def _active(y: np.ndarray, ref: np.ndarray) -> bool:
+def _active(y: np.ndarray, ref: np.ndarray, thr_db: float = -30.0) -> bool:
     if y is None or y.size == 0:
         return False
     a = float(np.sqrt(np.mean(y.astype(np.float64) ** 2)))
     b = float(np.sqrt(np.mean(ref.astype(np.float64) ** 2))) + 1e-12
-    return 20 * np.log10(a / b + 1e-12) > -30
+    return 20 * np.log10(a / b + 1e-12) > thr_db
 
 
 def _clap(mono: np.ndarray, cfg: Config) -> dict:
@@ -301,12 +306,14 @@ def _clap(mono: np.ndarray, cfg: Config) -> dict:
     return t
 
 
-def _is_electronic(gr: dict, rh: dict) -> bool:
+def _is_electronic(gr: dict, rh: dict, vocals: bool = False) -> bool:
+    """Four-on-the-floor kick on a rock-steady grid -> use club vocabulary (groove/build/drop) for sections;
+    otherwise verse/chorus."""
     main = groove.most_common_pattern(gr.get("patterns", {}))
     steady = (rh.get("tempo_stability") or {}).get("steady", False)
     kick = (main or {}).get("grid_16", {}).get("kick", "")
     four = len(kick) == 16 and all(kick[i] == "x" for i in (0, 4, 8, 12))
-    return bool(steady or four)
+    return bool(four and steady and not vocals)
 
 
 def _summary_line(a: dict) -> str:
@@ -403,6 +410,7 @@ def assemble(audio, tc, depth, rh, dr, gr, dsound, ha, bass_info, voicing, melod
             "voicing": voicing,
             "uncertain_spans": ha.get("uncertain_spans", []),
             "confidence": ha.get("confidence"),
+            "implied_by_bass": bool(ha.get("implied_by_bass")),
         },
         "bass": {**bass_info, "midi": "midi/bass.mid" if notes.get("bass") else None, "sound": hints.get("bass")},
         "melody": {**melody_info, "midi": "midi/melody.mid" if melody_info.get("present") else None},
