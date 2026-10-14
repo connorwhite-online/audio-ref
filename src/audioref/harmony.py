@@ -7,7 +7,7 @@ import numpy as np
 from .theory import FAMILY, QUALITIES, Chord, Key, roman, spell_chord
 from .util import mode
 
-VERSION = "4"
+VERSION = "5"
 SR = 22050
 HOP = 512
 BPO = 36  # CQT bins per octave (3 per semitone)
@@ -180,7 +180,8 @@ def _extend(chord: Chord, treble_seg: np.ndarray, note_pcs: np.ndarray | None, t
 
 
 # ------------------------------------------------------------------ key
-def estimate_key(treble: np.ndarray, bass: np.ndarray, chords: list[dict]) -> tuple[Key, float, list[dict]]:
+def estimate_key(treble: np.ndarray, bass: np.ndarray, chords: list[dict],
+                 phrase_starts: list[float] | None = None) -> tuple[Key, float, list[dict]]:
     prof_chroma = treble.sum(axis=1) + 0.7 * bass.sum(axis=1)
     pc = prof_chroma / (prof_chroma.sum() + 1e-9)
     scores = []
@@ -204,8 +205,22 @@ def estimate_key(treble: np.ndarray, bass: np.ndarray, chords: list[dict]) -> tu
                     tonic_w += dur
             fit /= total
             tonic_w /= total
-            scores.append({"key": key, "score": float(corr + 0.8 * fit + 0.6 * tonic_w), "corr": float(corr),
-                           "chord_fit": float(fit), "tonic_weight": float(tonic_w)})
+            # loops usually start on the tonic: chord at phrase starts (every 4th bar) separates relative keys
+            phrase_w = 0.0
+            if phrase_starts:
+                hits = 0
+                n_ps = 0
+                for t in phrase_starts:
+                    c = next((c for c in chords if c["start"] - 1e-3 <= t < c["end"] and c.get("_chord") is not None), None)
+                    if c is None:
+                        continue
+                    n_ps += 1
+                    ch = c["_chord"]
+                    hits += ch.root == tonic and ((ch.family == "maj") == (mode_name == "major"))
+                phrase_w = hits / n_ps if n_ps else 0.0
+                phrase_w = phrase_w if phrase_w >= 0.5 else 0.0  # only decisive evidence counts
+            scores.append({"key": key, "score": float(corr + 0.8 * fit + 0.6 * tonic_w + 0.35 * phrase_w), "corr": float(corr),
+                           "chord_fit": float(fit), "tonic_weight": float(tonic_w), "phrase_tonic": float(phrase_w)})
     scores.sort(key=lambda s: -s["score"])
     best, second = scores[0], scores[1]
     conf = float(np.clip((best["score"] - second["score"]) / 0.25, 0.0, 1.0) * 0.6 + 0.4 * np.clip(best["corr"], 0, 1))
@@ -401,7 +416,8 @@ def analyze(y_harm: np.ndarray, beats, downbeats, meter: int, y_bass: np.ndarray
         seg["confidence"] = float(np.clip((Ei[k_sel] - alt) / 0.25 + 0.3, 0, 1))
         chords.append(seg)
 
-    key, key_conf, key_alts = estimate_key(treble, bass, chords)
+    phrase_starts = [float(downbeats[b]) for b in range(0, len(downbeats), 4)] if len(downbeats) else None
+    key, key_conf, key_alts = estimate_key(treble, bass, chords, phrase_starts)
     for c in chords:
         ch = c.pop("_chord")
         c["symbol"] = spell_chord(ch, key)

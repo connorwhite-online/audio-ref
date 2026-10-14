@@ -236,7 +236,7 @@ class Pipeline:
         stru = tc.cached(f"structure-{tag}-{'edm' if electronic else 'song'}", structure.VERSION + "." + rhythm.VERSION, lambda: structure.analyze(
             mono, SR22, beats, downbeats, meter, {k: v for k, v in st22.items() if _active(v, mono)}, hits, gr,
             np.asarray(tc_) if tc_ is not None else None, notes["melody"] or None, audio.stereo, ingest.SR,
-            electronic), force)
+            electronic, ha.get("bar_chords"), (ha.get("loop") or {}).get("length_bars")), force)
 
         analysis = assemble(audio, tc, depth, rh, dr, gr, dsound, ha, bass_info, voicing, melody_info, snd, tags, stru,
                             {"separation": sep_used, "beats": rh.get("method"), "drums": dr.get("method"),

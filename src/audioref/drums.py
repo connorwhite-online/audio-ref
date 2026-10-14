@@ -16,7 +16,7 @@ from scipy import ndimage, signal
 
 from .util import log, parabolic_peak
 
-VERSION = "10"
+VERSION = "11"
 SR = 44100
 HOP = 128
 N_FFT = 1024
@@ -186,6 +186,19 @@ def _band_energy(x: np.ndarray, t: float, sr: int, lo: float, hi: float, dur: fl
     return float(sp[(f >= lo) & (f < hi)].sum())
 
 
+def _mid_flatness(x: np.ndarray, t: float, sr: int) -> float:
+    """Spectral flatness of the 0.3-5 kHz attack: tonal clicks (rim, cowbell) are low, snare noise is high.
+    Hats layered on the hit live above 5 kHz and don't affect it."""
+    i0 = max(0, int((t - 0.001) * sr))
+    seg = x[i0: i0 + int(0.025 * sr)]
+    if seg.size < 64:
+        return 1.0
+    sp = np.abs(np.fft.rfft(seg * np.hanning(seg.size), n=4096)) ** 2
+    f = np.fft.rfftfreq(4096, 1 / sr)
+    band = sp[(f >= 300) & (f < 5000)] + 1e-18
+    return float(np.exp(np.mean(np.log(band))) / np.mean(band))
+
+
 def _mid_hf_ratio(x: np.ndarray, t: float, sr: int) -> float:
     """Attack energy ratio (0.8-5 kHz) / (5-12 kHz) in the first 20 ms after t."""
     i0 = max(0, int((t - 0.002) * sr))
@@ -243,13 +256,15 @@ def _first_onset(env: np.ndarray, t_lo: float, t_hi: float, sr: int, max_gap_s: 
     return (i0 + i) / sr
 
 
-def _snare_family(env_mid: np.ndarray, t: float, sr: int, atom_decay_ms: float, near_kick: bool) -> str:
-    """clap (micro-bursts) | rim (very short: per hit when away from a kick click, else per atom) | snare."""
+def _snare_family(env_mid: np.ndarray, t: float, sr: int, atom_decay_ms: float, near_kick: bool,
+                  flatness: float = 0.5) -> str:
+    """clap (micro-bursts) | rim (very short, tonal click) | snare (noisy)."""
     if _is_clap(env_mid, t, sr):
         return "clap"
-    if 0 < atom_decay_ms < 40:
+    tonal = flatness < 0.15
+    if 0 < atom_decay_ms < 40 and tonal:
         return "rim"
-    if not near_kick:
+    if not near_kick and tonal:
         i0 = int(t * sr)
         seg = env_mid[i0: i0 + int(0.15 * sr)]
         if seg.size > 10:
@@ -608,7 +623,7 @@ def transcribe(drums_mono: np.ndarray, sr: int = SR) -> dict:
             voice = label
             if label == "snare":
                 near_kick = bool(len(kick_t) and np.min(np.abs(kick_t - t)) < 0.02)
-                voice = _snare_family(envs["clap"], t, sr, a["decay_ms"], near_kick)
+                voice = _snare_family(envs["clap"], t, sr, a["decay_ms"], near_kick, _mid_flatness(x, t, sr))
             elif label in ("hat_closed", "hat_open"):
                 layered = np.sum(np.abs(all_t - t) < 0.015) > 1
                 gap = hs[i + 1][0] - t if i + 1 < len(hs) else 1.0

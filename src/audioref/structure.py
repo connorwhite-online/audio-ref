@@ -8,7 +8,7 @@ from scipy import ndimage, signal
 from . import loudness
 from .util import robust_norm
 
-VERSION = "4"
+VERSION = "7"
 SR = 22050
 
 
@@ -150,8 +150,10 @@ def _novelty(F: np.ndarray, k: int) -> np.ndarray:
     return nov / (nov.max() + 1e-9)
 
 
-def segment(F: np.ndarray, layers: dict[str, np.ndarray], min_len: int = 2, phrase: int = 4) -> list[int]:
-    """Bar indices of section starts (always includes 0)."""
+def segment(F: np.ndarray, layers: dict[str, np.ndarray], min_len: int = 2, phrase: int = 4,
+            cues: np.ndarray | None = None) -> list[int]:
+    """Bar indices of section starts (always includes 0). `cues` adds boundary evidence per bar (e.g. the
+    start/end of a snare roll, the bar after a fill)."""
     n = len(F)
     if n < 2 * min_len:
         return [0]
@@ -166,6 +168,8 @@ def segment(F: np.ndarray, layers: dict[str, np.ndarray], min_len: int = 2, phra
     bonus = np.array([0.2 if i % (2 * phrase) == 0 else 0.15 if i % phrase == 0 else 0.03 if i % 2 == 0 else 0.0
                       for i in range(n)])
     score = nov + bonus * (nov > 0.1)
+    if cues is not None and len(cues) == n:
+        score = score + cues
     thr = max(0.35, float(np.percentile(score, 75)))
     cands = [i for i in range(1, n) if score[i] >= thr and score[i] >= score[max(0, i - 1)] and
              score[i] >= score[min(n - 1, i + 1)]]
@@ -177,22 +181,26 @@ def segment(F: np.ndarray, layers: dict[str, np.ndarray], min_len: int = 2, phra
     return sorted(chosen)
 
 
-def _cluster_letters(sec_feats: list[np.ndarray], thr: float = 0.85) -> list[str]:
+def _cluster_letters(sec_feats: list[np.ndarray], thr: float = 0.85, chord_sets: list[set] | None = None) -> list[str]:
+    """Similarity letters (A, B, ...). With chord sets, sections must also share their harmony to group."""
     letters = []
-    protos: list[tuple[str, np.ndarray]] = []
+    protos: list[tuple[str, np.ndarray, set | None]] = []
     nxt = iter("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    for f in sec_feats:
+    for i, f in enumerate(sec_feats):
         fn = f / (np.linalg.norm(f) + 1e-9)
+        cs = chord_sets[i] if chord_sets else None
         best, bs = None, -1.0
-        for lab, p in protos:
+        for lab, p, pcs in protos:
             s = float(fn @ p)
+            if cs and pcs and len(cs | pcs) and len(cs & pcs) / len(cs | pcs) < 0.5:
+                continue  # different chord vocabulary: not the same section type
             if s > bs:
                 best, bs = lab, s
         if best is not None and bs >= thr:
             letters.append(best)
         else:
             lab = next(nxt)
-            protos.append((lab, fn))
+            protos.append((lab, fn, cs))
             letters.append(lab)
     return letters
 
@@ -252,7 +260,7 @@ def beat_stops(mix: np.ndarray, beats: np.ndarray, sr: int, downbeats: np.ndarra
 def analyze(mix: np.ndarray, sr: int, beats, downbeats, meter: int, stems: dict[str, np.ndarray],
             drum_hits: dict | None = None, groove: dict | None = None, chroma_beats: np.ndarray | None = None,
             melody_notes: list | None = None, stereo_orig: np.ndarray | None = None, sr_orig: int = 44100,
-            electronic: bool = True) -> dict:
+            electronic: bool = True, bar_chords: list | None = None, loop_bars: int | None = None) -> dict:
     beats = np.asarray(beats, dtype=float)
     downbeats = np.asarray(downbeats, dtype=float)
     if len(downbeats) < 2:
@@ -261,7 +269,25 @@ def analyze(mix: np.ndarray, sr: int, beats, downbeats, meter: int, stems: dict[
     layers = layer_activity(stems, mix, downbeats, sr, drum_hits, melody_notes)
     nb = len(downbeats)
     F = _bar_features(mix, sr, downbeats, chroma_beats, beats, layers)
-    starts = segment(F, layers, min_len=4 if nb >= 32 else 2)
+    cues = np.zeros(nb)
+    pats = (groove or {}).get("patterns", {}) if groove else {}
+    for r in pats.get("rolls", []):  # a build roll starts and ends sections (its last bar may hold a stop)
+        for b, w in ((r["start_bar"], 0.6), (r["end_bar"], 0.4), (r["end_bar"] + 1, 0.4)):
+            if 0 < b < nb:
+                cues[b] += w
+    for f in pats.get("fills", []):  # the bar after a fill usually starts something new
+        if 0 < f["bar"] + 1 < nb:
+            cues[f["bar"] + 1] += 0.2
+    if bar_chords and len(bar_chords) >= 8:  # the chord loop changes -> a new section (e.g. waltz A/B)
+        L = loop_bars if loop_bars and 2 <= loop_bars <= 8 else 4
+        bc = [tuple(b) for b in bar_chords]
+        for b in range(L, min(nb, len(bc)) - 1, L):
+            prev, nxt = bc[b - L: b], bc[b: b + L]
+            if len(nxt) == L and all(x and x != ("N",) for x in prev + nxt):
+                same = sum(p == q for p, q in zip(prev, nxt)) / L
+                if same <= 0.5:
+                    cues[b] += 0.5
+    starts = segment(F, layers, min_len=4 if nb >= 32 else 2, cues=cues)
     bounds = starts + [nb]
     # bar energy
     db_idx = np.array([int(np.argmin(np.abs(beats - d))) for d in downbeats])
@@ -293,7 +319,10 @@ def analyze(mix: np.ndarray, sr: int, beats, downbeats, meter: int, stems: dict[
                 if m.any():
                     sec["lufs"] = round(float(np.median(st_lufs[m])), 1)
         secs.append(sec)
-    letters = _cluster_letters([F[s["start_bar"]: s["end_bar"]].mean(axis=0) for s in secs])
+    chord_sets = None
+    if bar_chords:
+        chord_sets = [{c for b in bar_chords[s["start_bar"]: s["end_bar"]] for c in b if c != "N"} for s in secs]
+    letters = _cluster_letters([F[s["start_bar"]: s["end_bar"]].mean(axis=0) for s in secs], chord_sets=chord_sets)
     for s, l in zip(secs, letters):
         s["group"] = l
 
