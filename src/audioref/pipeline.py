@@ -243,6 +243,9 @@ class Pipeline:
 
         midi_files = midi_mod.export_all(tc.midi_dir, analysis, hits, notes)
         analysis["files"]["midi"] = midi_files
+        # raw events for on-demand tools (32nd-note grids, MIDI summaries) without re-analysis
+        write_json(tc.dir / "hits.json", hits, ndigits=5, indent=None)
+        write_json(tc.dir / "notes.json", {k: [list(n) for n in v] for k, v in notes.items()}, ndigits=4, indent=None)
         if export_stems:
             exported = {}
             for k, v in stems44.items():
